@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GameDev Hub - 游戏开发者协作平台</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="app">
+        <nav class="navbar">
+            <div class="nav-container">
+                <div class="logo" onclick="navigate('home')">
+                    <span class="logo-icon">🎮</span>
+                    <span class="logo-text">GameDev Hub</span>
+                </div>
+                <ul class="nav-menu" id="nav-menu">
+                    <li class="mobile-user-info-item">
+                        <div class="mobile-user-info" id="mobile-user-info">
+                            <div class="avatar">
+                                <img src="" alt="avatar" id="mobile-avatar-img">
+                            </div>
+                            <div class="mobile-user-details">
+                                <div class="mobile-user-name" id="mobile-user-name"></div>
+                                <div class="mobile-user-email" id="mobile-user-email"></div>
+                            </div>
+                        </div>
+                    </li>
+                    <li><a href="javascript:void(0)" onclick="navigate('home')">首页</a></li>
+                    <li><a href="javascript:void(0)" onclick="navigate('ideas')">想法广场</a></li>
+                    <li><a href="javascript:void(0)" onclick="navigate('users')">开发者</a></li>
+                    <li id="nav-chat" style="display: none;">
+                        <a href="javascript:void(0)" onclick="navigate('chat')">
+                            💬 消息
+                            <span id="chat-unread-badge" class="badge" style="display: none;">0</span>
+                        </a>
+                    </li>
+                    <li id="nav-create" style="display: none;"><a href="javascript:void(0)" onclick="navigate('create-idea')">+ 发布灵感</a></li>
+                    <li id="nav-admin" style="display: none;"><a href="javascript:void(0)" onclick="navigate('admin')">管理后台</a></li>
+                    <li id="mobile-nav-profile" class="mobile-only-link"><a href="javascript:void(0)" onclick="navigate('profile')">👤 个人中心</a></li>
+                    <li id="mobile-nav-my-ideas" class="mobile-only-link"><a href="javascript:void(0)" onclick="navigate('my-ideas')">💡 我的灵感</a></li>
+                    <li id="mobile-nav-logout" class="mobile-only-link"><a href="javascript:void(0)" onclick="logout()">🚪 退出登录</a></li>
+                    <li class="mobile-nav-actions-item">
+                        <div class="mobile-nav-actions" id="mobile-nav-actions">
+                            <button class="btn btn-outline btn-block" onclick="navigate('login')">登录</button>
+                            <button class="btn btn-primary btn-block" onclick="navigate('register')">注册</button>
+                        </div>
+                    </li>
+                </ul>
+                <div class="nav-overlay" id="nav-overlay"></div>
+                <div class="nav-auth" id="nav-auth">
+                    <button class="btn btn-outline" onclick="navigate('login')">登录</button>
+                    <button class="btn btn-primary" onclick="navigate('register')">注册</button>
+                </div>
+                <div class="nav-user" id="nav-user" style="display: none;">
+                    <span class="user-greeting" id="user-greeting">你好</span>
+                    <div class="user-menu">
+                        <div class="avatar" id="user-avatar" onclick="toggleUserMenu()">
+                            <img src="" alt="avatar" id="avatar-img">
+                        </div>
+                        <div class="dropdown-menu" id="user-dropdown">
+                            <a href="javascript:void(0)" onclick="navigate('profile')">个人中心</a>
+                            <a href="javascript:void(0)" onclick="navigate('my-ideas')">我的灵感</a>
+                            <a href="javascript:void(0)" onclick="logout()">退出登录</a>
+                        </div>
+                    </div>
+                </div>
+                <button class="hamburger" id="hamburger" aria-label="菜单">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </button>
+            </div>
+        </nav>
+
+        <main id="main-content">
+        </main>
+
+        <footer class="footer">
+            <div class="footer-content">
+                <p>&copy; 2024 GameDev Hub. 为游戏开发者打造的协作平台。</p>
+            </div>
+        </footer>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jsencrypt@3.3.2/bin/jsencrypt.min.js"></script>
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/auth.js"></script>
+    <script src="/static/js/chat.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
