@@ -8,10 +8,95 @@ bcrypt = Bcrypt()
 jwt = JWTManager()
 
 
+PROJECT_CHANNELS = [
+    {'key': 'planning_chat', 'name': '策划闲聊', 'icon': '📋'},
+    {'key': 'dev_discussion', 'name': '程序对接', 'icon': '💻'},
+    {'key': 'art_request', 'name': '美术需求', 'icon': '🎨'},
+    {'key': 'bug_report', 'name': 'BUG反馈', 'icon': '🐛'},
+    {'key': 'temp_idea', 'name': '临时脑洞', 'icon': '💡'},
+]
+
+
+class Project(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text, default='')
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    members = db.relationship('ProjectMember', backref='project', lazy=True, cascade='all, delete-orphan')
+    channels = db.relationship('ChatRoom', backref='project', lazy=True, cascade='all, delete-orphan')
+    
+    def to_dict(self, current_user_id=None):
+        from app import format_datetime_iso
+        
+        data = {
+            'id': self.id,
+            'name': self.name,
+            'description': self.description,
+            'created_by': self.created_by,
+            'created_at': format_datetime_iso(self.created_at),
+            'updated_at': format_datetime_iso(self.updated_at),
+            'members_count': len(self.members),
+        }
+        
+        if current_user_id:
+            membership = ProjectMember.query.filter_by(
+                project_id=self.id,
+                user_id=current_user_id
+            ).first()
+            data['is_member'] = membership is not None
+            data['role'] = membership.role if membership else None
+        
+        return data
+    
+    def get_channels(self):
+        channels = []
+        for ch in PROJECT_CHANNELS:
+            room = ChatRoom.query.filter_by(
+                project_id=self.id,
+                channel_type=ch['key']
+            ).first()
+            if room:
+                channel_data = room.to_dict()
+                channel_data['channel_type'] = ch['key']
+                channel_data['channel_name'] = ch['name']
+                channel_data['channel_icon'] = ch['icon']
+                channels.append(channel_data)
+        return channels
+
+
+class ProjectMember(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    project_id = db.Column(db.Integer, db.ForeignKey('project.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    role = db.Column(db.String(20), default='member')  # 'owner', 'admin', 'member'
+    joined_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    user = db.relationship('User', backref='project_memberships')
+    
+    __table_args__ = (db.UniqueConstraint('project_id', 'user_id', name='_project_user_uc'),)
+    
+    def to_dict(self):
+        from app import format_datetime_iso
+        
+        return {
+            'id': self.id,
+            'project_id': self.project_id,
+            'user_id': self.user_id,
+            'user': self.user.to_dict(),
+            'role': self.role,
+            'joined_at': format_datetime_iso(self.joined_at),
+        }
+
+
 class ChatRoom(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100))
-    type = db.Column(db.String(20), default='group')  # 'group' or 'private'
+    type = db.Column(db.String(20), default='group')  # 'group' or 'private' or 'project'
+    project_id = db.Column(db.Integer, db.ForeignKey('project.id'), nullable=True)
+    channel_type = db.Column(db.String(50), nullable=True)  # 项目频道类型
     created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -33,6 +118,8 @@ class ChatRoom(db.Model):
             'id': self.id,
             'name': self.name or (other_member.username if other_member else '私聊'),
             'type': self.type,
+            'project_id': self.project_id,
+            'channel_type': self.channel_type,
             'created_by': self.created_by,
             'created_at': format_datetime_iso(self.created_at),
             'updated_at': format_datetime_iso(self.updated_at),

@@ -64,6 +64,14 @@ def migrate_database():
         else:
             print("\n2. User 表不存在，将在后续步骤中创建")
         
+        chat_room_table_exists = table_exists(engine, 'chat_room')
+        if chat_room_table_exists:
+            print("\n3. 检查并添加 ChatRoom 的项目相关字段...")
+            add_column_if_not_exists(engine, 'chat_room', 'project_id', 'INTEGER')
+            add_column_if_not_exists(engine, 'chat_room', 'channel_type', 'VARCHAR(50)')
+        else:
+            print("\n3. ChatRoom 表不存在，将在后续步骤中创建")
+        
         from app import create_app
         from app.models import db as main_db
         

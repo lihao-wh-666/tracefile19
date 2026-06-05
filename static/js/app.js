@@ -27,6 +27,9 @@ class App {
                 if (this.currentPage === 'chat' && this.currentRoomId === message.room_id) {
                     this.appendMessage(message);
                 }
+                if (this.currentPage === 'project' && this.currentChannelId === message.room_id) {
+                    this.appendProjectChatMessage(message);
+                }
             });
             
             chatClient.setOnNotificationCallback((data) => {
@@ -50,6 +53,7 @@ class App {
         const navUser = document.getElementById('nav-user');
         const navCreate = document.getElementById('nav-create');
         const navAdmin = document.getElementById('nav-admin');
+        const navProjects = document.getElementById('nav-projects');
         const navChat = document.getElementById('nav-chat');
         const userGreeting = document.getElementById('user-greeting');
         const avatarImg = document.getElementById('avatar-img');
@@ -67,6 +71,7 @@ class App {
             navAuth.style.display = 'none';
             navUser.style.display = 'flex';
             navCreate.style.display = 'block';
+            navProjects.style.display = 'block';
             navChat.style.display = 'block';
             userGreeting.textContent = `你好, ${auth.currentUser.username}`;
             avatarImg.src = auth.currentUser.avatar && auth.currentUser.avatar !== 'default.png'
@@ -95,6 +100,7 @@ class App {
             navAuth.style.display = 'flex';
             navUser.style.display = 'none';
             navCreate.style.display = 'none';
+            navProjects.style.display = 'none';
             navAdmin.style.display = 'none';
             navChat.style.display = 'none';
 
@@ -187,6 +193,12 @@ class App {
                 break;
             case 'users':
                 this.renderUsers(main);
+                break;
+            case 'projects':
+                this.renderProjects(main);
+                break;
+            case 'project':
+                this.renderProjectDetail(main, this.currentParams.id);
                 break;
             case 'chat':
                 this.renderChat(main, this.currentParams.id);
@@ -2490,6 +2502,393 @@ class App {
         } catch (error) {
             showToast(error.message, 'error');
         }
+    }
+
+    async renderProjects(container) {
+        if (!auth.isLoggedIn()) {
+            navigate('login');
+            return;
+        }
+
+        container.innerHTML = `
+            <div class="page-header">
+                <h1>我的项目</h1>
+                <button class="btn btn-primary" onclick="app.showCreateProjectModal()">+ 创建项目</button>
+            </div>
+            <div id="projects-grid" class="projects-grid">
+                <div class="loading"><div class="spinner"></div></div>
+            </div>
+            
+            <div id="create-project-modal" class="modal" style="display: none;">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3>创建新项目</h3>
+                        <button class="modal-close" onclick="app.hideCreateProjectModal()">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="form-group">
+                            <label>项目名称 *</label>
+                            <input type="text" id="new-project-name" placeholder="输入项目名称" maxlength="100">
+                        </div>
+                        <div class="form-group">
+                            <label>项目描述</label>
+                            <textarea id="new-project-desc" placeholder="简单介绍一下你的项目..." rows="3"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label>邀请成员</label>
+                            <div id="project-user-select-list" class="user-select-list">
+                                <div class="loading"><div class="spinner"></div></div>
+                            </div>
+                        </div>
+                        <div class="project-channels-preview">
+                            <h4 style="margin-bottom: 0.75rem; font-size: 0.9rem; color: var(--text-secondary);">项目将自动创建以下频道：</h4>
+                            <div class="channels-preview-list">
+                                <div class="channel-preview-item">
+                                    <span class="channel-icon">📋</span>
+                                    <span>策划闲聊</span>
+                                </div>
+                                <div class="channel-preview-item">
+                                    <span class="channel-icon">💻</span>
+                                    <span>程序对接</span>
+                                </div>
+                                <div class="channel-preview-item">
+                                    <span class="channel-icon">🎨</span>
+                                    <span>美术需求</span>
+                                </div>
+                                <div class="channel-preview-item">
+                                    <span class="channel-icon">🐛</span>
+                                    <span>BUG反馈</span>
+                                </div>
+                                <div class="channel-preview-item">
+                                    <span class="channel-icon">💡</span>
+                                    <span>临时脑洞</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-outline" onclick="app.hideCreateProjectModal()">取消</button>
+                        <button class="btn btn-primary" onclick="app.createProject()">创建项目</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        await this.loadProjects();
+    }
+
+    async loadProjects() {
+        const grid = document.getElementById('projects-grid');
+        if (!grid) return;
+
+        try {
+            const result = await api.get('/projects');
+            const projects = result.projects;
+
+            if (projects.length === 0) {
+                grid.innerHTML = `
+                    <div class="empty-state" style="grid-column: 1 / -1;">
+                        <div class="empty-state-icon">📁</div>
+                        <h3>还没有项目</h3>
+                        <p>创建你的第一个项目，开始团队协作吧！</p>
+                        <button class="btn btn-primary" onclick="app.showCreateProjectModal()" style="margin-top: 1rem;">+ 创建项目</button>
+                    </div>
+                `;
+                return;
+            }
+
+            grid.innerHTML = projects.map(project => this.renderProjectCard(project)).join('');
+        } catch (error) {
+            grid.innerHTML = `<div class="empty-state"><p>加载失败，请刷新重试</p></div>`;
+        }
+    }
+
+    renderProjectCard(project) {
+        const channelIcons = ['📋', '💻', '🎨', '🐛', '💡'];
+        
+        return `
+            <div class="project-card" onclick="navigate('project/${project.id}')">
+                <div class="project-card-header">
+                    <div class="project-icon">🎮</div>
+                    <div class="project-info">
+                        <h3 class="project-name">${escapeHtml(project.name)}</h3>
+                        <p class="project-desc">${escapeHtml(project.description || '暂无描述')}</p>
+                    </div>
+                </div>
+                <div class="project-card-footer">
+                    <div class="project-channels">
+                        ${channelIcons.map(icon => `<span class="channel-mini-icon">${icon}</span>`).join('')}
+                    </div>
+                    <div class="project-members-count">
+                        👥 ${project.members_count} 人
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    async showCreateProjectModal() {
+        document.getElementById('create-project-modal').style.display = 'flex';
+        
+        try {
+            const result = await api.get('/profile/list?per_page=100');
+            const users = result.users.filter(u => u.id !== auth.currentUser.id);
+            
+            const container = document.getElementById('project-user-select-list');
+            if (users.length === 0) {
+                container.innerHTML = '<p style="color: var(--text-muted); text-align: center; padding: 1rem;">暂无其他用户</p>';
+            } else {
+                container.innerHTML = users.map(user => {
+                    const avatar = user.avatar && user.avatar !== 'default.png'
+                        ? user.avatar
+                        : `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username)}&background=6366f1&color=fff`;
+                    
+                    return `
+                        <label class="user-select-item">
+                            <input type="checkbox" value="${user.id}" class="project-user-checkbox">
+                            <img src="${avatar}" alt="${escapeHtml(user.username)}">
+                            <span>${escapeHtml(user.username)}</span>
+                        </label>
+                    `;
+                }).join('');
+            }
+        } catch (error) {
+            document.getElementById('project-user-select-list').innerHTML = '<p>加载用户列表失败</p>';
+        }
+    }
+
+    hideCreateProjectModal() {
+        document.getElementById('create-project-modal').style.display = 'none';
+    }
+
+    async createProject() {
+        const name = document.getElementById('new-project-name').value.trim();
+        const description = document.getElementById('new-project-desc').value.trim();
+        
+        if (!name) {
+            showToast('请输入项目名称', 'error');
+            return;
+        }
+
+        const memberCheckboxes = document.querySelectorAll('.project-user-checkbox:checked');
+        const member_ids = Array.from(memberCheckboxes).map(cb => parseInt(cb.value));
+
+        try {
+            const result = await api.post('/projects', {
+                name,
+                description,
+                member_ids
+            });
+            
+            showToast('项目创建成功！', 'success');
+            this.hideCreateProjectModal();
+            navigate(`project/${result.project.id}`);
+        } catch (error) {
+            showToast(error.message, 'error');
+        }
+    }
+
+    async renderProjectDetail(container, projectId) {
+        if (!auth.isLoggedIn()) {
+            navigate('login');
+            return;
+        }
+
+        this.currentProjectId = projectId ? parseInt(projectId) : null;
+        this.currentChannelId = null;
+        this.projectChatMessages = [];
+
+        container.innerHTML = `
+            <div class="project-detail-layout">
+                <div class="project-sidebar">
+                    <div class="project-sidebar-header">
+                        <button class="btn btn-outline btn-sm" onclick="navigate('projects')">← 返回</button>
+                    </div>
+                    <div class="project-info-section" id="project-info-section">
+                        <div class="loading"><div class="spinner"></div></div>
+                    </div>
+                    <div class="project-channels-section">
+                        <h4 class="section-title">项目频道</h4>
+                        <div class="project-channels-list" id="project-channels-list">
+                            <div class="loading"><div class="spinner"></div></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="project-main-content">
+                    <div class="project-chat-empty" id="project-chat-empty">
+                        <div class="empty-state-icon">💬</div>
+                        <h3>选择一个频道开始聊天</h3>
+                        <p>每个项目都有5个固定频道，按主题分类讨论</p>
+                    </div>
+                    <div class="project-chat-window" id="project-chat-window" style="display: none;">
+                        <div class="chat-header" id="project-chat-header"></div>
+                        <div class="chat-messages" id="project-chat-messages"></div>
+                        <div class="chat-input-area">
+                            <div id="project-typing-indicator" class="typing-indicator" style="display: none;"></div>
+                            <div class="chat-input-wrapper">
+                                <textarea id="project-chat-input" placeholder="输入消息..." onkeydown="app.handleProjectChatInputKeydown(event)"></textarea>
+                                <button class="btn btn-primary" onclick="app.sendProjectChatMessage()">发送</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        await this.loadProjectDetail(projectId);
+    }
+
+    async loadProjectDetail(projectId) {
+        try {
+            const result = await api.get(`/projects/${projectId}`);
+            const project = result.project;
+            this.currentProject = project;
+            this.projectChannels = project.channels || [];
+
+            this.renderProjectInfo(project);
+            this.renderProjectChannels();
+
+            if (this.projectChannels.length > 0) {
+                await this.openProjectChannel(this.projectChannels[0].id);
+            }
+        } catch (error) {
+            showToast(error.message, 'error');
+            navigate('projects');
+        }
+    }
+
+    renderProjectInfo(project) {
+        const section = document.getElementById('project-info-section');
+        if (!section) return;
+
+        const isOwner = project.role === 'owner';
+
+        section.innerHTML = `
+            <div class="project-detail-info">
+                <div class="project-detail-icon">🎮</div>
+                <h2 class="project-detail-name">${escapeHtml(project.name)}</h2>
+                <p class="project-detail-desc">${escapeHtml(project.description || '暂无描述')}</p>
+                <div class="project-detail-meta">
+                    <span>👥 ${project.members_count} 人</span>
+                    <span class="project-role-badge ${project.role}">${project.role === 'owner' ? '所有者' : project.role === 'admin' ? '管理员' : '成员'}</span>
+                </div>
+            </div>
+        `;
+    }
+
+    renderProjectChannels() {
+        const list = document.getElementById('project-channels-list');
+        if (!list || !this.projectChannels) return;
+
+        list.innerHTML = this.projectChannels.map(channel => {
+            const isActive = this.currentChannelId === channel.id;
+            const lastMessage = channel.last_message;
+            const unreadCount = 0;
+
+            return `
+                <div class="project-channel-item ${isActive ? 'active' : ''}" onclick="app.openProjectChannel(${channel.id})">
+                    <span class="channel-icon">${channel.channel_icon || '💬'}</span>
+                    <div class="channel-info">
+                        <span class="channel-name">${escapeHtml(channel.channel_name || channel.name)}</span>
+                        ${lastMessage ? `<span class="channel-preview">${escapeHtml(lastMessage.content?.substring(0, 20) || '')}</span>` : ''}
+                    </div>
+                    ${unreadCount > 0 ? `<span class="unread-badge">${unreadCount}</span>` : ''}
+                </div>
+            `;
+        }).join('');
+    }
+
+    async openProjectChannel(channelId) {
+        this.currentChannelId = channelId;
+        chatClient.joinRoom(channelId);
+
+        document.getElementById('project-chat-empty').style.display = 'none';
+        document.getElementById('project-chat-window').style.display = 'flex';
+
+        const channel = this.projectChannels.find(c => c.id === channelId);
+        if (channel) {
+            const header = document.getElementById('project-chat-header');
+            header.innerHTML = `
+                <div class="chat-room-avatar">
+                    <span class="group-avatar">${channel.channel_icon || '💬'}</span>
+                </div>
+                <div class="chat-room-info">
+                    <span class="chat-room-name">${escapeHtml(channel.channel_name || channel.name)}</span>
+                    <span class="chat-room-type">项目频道 · ${channel.members_count}人</span>
+                </div>
+            `;
+        }
+
+        this.renderProjectChannels();
+        await this.loadProjectChatMessages(channelId);
+        
+        chatClient.markAsRead(channelId);
+        chatClient.updateUnreadCount();
+    }
+
+    async loadProjectChatMessages(roomId) {
+        const container = document.getElementById('project-chat-messages');
+        if (!container) return;
+
+        try {
+            const result = await chatClient.getMessages(roomId);
+            this.projectChatMessages = result.messages;
+            this.renderProjectChatMessages();
+        } catch (error) {
+            console.error('Failed to load messages:', error);
+        }
+    }
+
+    renderProjectChatMessages() {
+        const container = document.getElementById('project-chat-messages');
+        if (!container) return;
+
+        if (this.projectChatMessages.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state" style="padding: 2rem;">
+                    <div class="empty-state-icon">💬</div>
+                    <p>还没有消息，发送第一条消息吧！</p>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = this.projectChatMessages.map(msg => this.renderChatMessage(msg)).join('');
+        container.scrollTop = container.scrollHeight;
+    }
+
+    appendProjectChatMessage(message) {
+        if (message.room_id !== this.currentChannelId) return;
+        
+        this.projectChatMessages.push(message);
+        const container = document.getElementById('project-chat-messages');
+        if (container) {
+            container.insertAdjacentHTML('beforeend', this.renderChatMessage(message));
+            container.scrollTop = container.scrollHeight;
+        }
+        
+        chatClient.markAsRead(message.room_id);
+    }
+
+    handleProjectChatInputKeydown(event) {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            this.sendProjectChatMessage();
+        }
+        
+        if (this.currentChannelId) {
+            chatClient.sendTyping(this.currentChannelId, true);
+        }
+    }
+
+    sendProjectChatMessage() {
+        const input = document.getElementById('project-chat-input');
+        const content = input?.value.trim();
+        
+        if (!content || !this.currentChannelId) return;
+        
+        chatClient.sendMessage(this.currentChannelId, content);
+        input.value = '';
     }
 }
 

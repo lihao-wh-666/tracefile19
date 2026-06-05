@@ -113,9 +113,11 @@ def login():
         minutes = remaining_seconds // 60
         seconds = remaining_seconds % 60
         return jsonify({
-            'error': f'Too many failed login attempts. Please try again in {minutes}m {seconds}s',
+            'error': f'Too many failed login attempts ({user.failed_login_attempts}/{max_attempts}). Please try again in {minutes}m {seconds}s',
             'locked': True,
-            'remaining_seconds': remaining_seconds
+            'remaining_seconds': remaining_seconds,
+            'failed_attempts': user.failed_login_attempts,
+            'max_attempts': max_attempts
         }), 429
     
     if not user.check_password(password):
@@ -123,15 +125,21 @@ def login():
         db.session.commit()
         
         attempts_left = max_attempts - user.failed_login_attempts
-        response_data = {'error': 'Invalid email or password'}
+        failed_count = user.failed_login_attempts
+        
+        response_data = {
+            'error': f'Invalid email or password. You have {failed_count} failed attempt(s), {attempts_left} attempt(s) left.',
+            'failed_attempts': failed_count,
+            'attempts_left': attempts_left
+        }
         
         if user.failed_login_attempts >= max_attempts:
             remaining_seconds = user.get_lock_remaining_seconds(lock_window)
+            minutes = remaining_seconds // 60
+            seconds = remaining_seconds % 60
             response_data['locked'] = True
             response_data['remaining_seconds'] = remaining_seconds
-            response_data['error'] = f'Too many failed login attempts. Account is locked for {lock_window} minutes'
-        elif attempts_left > 0:
-            response_data['attempts_left'] = attempts_left
+            response_data['error'] = f'Too many failed login attempts ({failed_count}/{max_attempts}). Account is locked for {minutes}m {seconds}s'
         
         return jsonify(response_data), 401
     
