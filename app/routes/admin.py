@@ -163,6 +163,7 @@ def list_users():
 @admin_bp.route('/users/<int:user_id>', methods=['GET'])
 @admin_required
 def get_user(user_id):
+    from flask import current_app
     user = User.query.get(user_id)
     
     if not user:
@@ -172,6 +173,16 @@ def get_user(user_id):
     user_data['ideas_count'] = IdeaCard.query.filter_by(user_id=user_id).count()
     user_data['likes_count'] = Like.query.filter_by(user_id=user_id).count()
     user_data['comments_count'] = Comment.query.filter_by(user_id=user_id).count()
+    
+    max_attempts = current_app.config.get('MAX_LOGIN_ATTEMPTS', 5)
+    lock_window = current_app.config.get('LOGIN_LOCK_WINDOW_MINUTES', 30)
+    
+    user_data['failed_login_attempts'] = user.failed_login_attempts
+    user_data['is_login_locked'] = user.is_login_locked(max_attempts, lock_window)
+    user_data['lock_remaining_seconds'] = user.get_lock_remaining_seconds(lock_window)
+    
+    from app import format_datetime_iso
+    user_data['last_failed_login_at'] = format_datetime_iso(user.last_failed_login_at) if user.last_failed_login_at else None
     
     return jsonify({'user': user_data}), 200
 
@@ -297,9 +308,33 @@ def reset_user_password(user_id):
         return jsonify({'error': 'New password must be at least 6 characters'}), 400
     
     user.set_password(new_password)
+    user.reset_failed_attempts()
     db.session.commit()
     
     return jsonify({'message': 'Password reset successfully'}), 200
+
+
+@admin_bp.route('/users/<int:user_id>/unlock', methods=['POST'])
+@admin_required
+def unlock_user(user_id):
+    current_user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+    
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    user.reset_failed_attempts()
+    db.session.commit()
+    
+    log_operation_from_request(
+        operation_type='admin_unlock',
+        target_type='user',
+        target_id=user_id,
+        user_id=current_user_id,
+        details={'username': user.username, 'email': user.email}
+    )
+    
+    return jsonify({'message': 'User login attempts reset successfully'}), 200
 
 
 @admin_bp.route('/ideas', methods=['GET'])

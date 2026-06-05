@@ -18,4 +18,7 @@ class Config:
     ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'admin@example.com')
     ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin123')
     
+    MAX_LOGIN_ATTEMPTS = int(os.environ.get('MAX_LOGIN_ATTEMPTS', 5))
+    LOGIN_LOCK_WINDOW_MINUTES = int(os.environ.get('LOGIN_LOCK_WINDOW_MINUTES', 30))
+    
     TIMEZONE = os.environ.get('TZ', 'Asia/Shanghai')

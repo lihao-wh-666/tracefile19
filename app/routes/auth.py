@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import (
     create_access_token,
     jwt_required,
@@ -105,8 +105,38 @@ def login():
     if not user.is_active:
         return jsonify({'error': 'Account is deactivated'}), 401
     
+    max_attempts = current_app.config.get('MAX_LOGIN_ATTEMPTS', 5)
+    lock_window = current_app.config.get('LOGIN_LOCK_WINDOW_MINUTES', 30)
+    
+    if user.is_login_locked(max_attempts, lock_window):
+        remaining_seconds = user.get_lock_remaining_seconds(lock_window)
+        minutes = remaining_seconds // 60
+        seconds = remaining_seconds % 60
+        return jsonify({
+            'error': f'Too many failed login attempts. Please try again in {minutes}m {seconds}s',
+            'locked': True,
+            'remaining_seconds': remaining_seconds
+        }), 429
+    
     if not user.check_password(password):
-        return jsonify({'error': 'Invalid email or password'}), 401
+        user.increment_failed_attempts()
+        db.session.commit()
+        
+        attempts_left = max_attempts - user.failed_login_attempts
+        response_data = {'error': 'Invalid email or password'}
+        
+        if user.failed_login_attempts >= max_attempts:
+            remaining_seconds = user.get_lock_remaining_seconds(lock_window)
+            response_data['locked'] = True
+            response_data['remaining_seconds'] = remaining_seconds
+            response_data['error'] = f'Too many failed login attempts. Account is locked for {lock_window} minutes'
+        elif attempts_left > 0:
+            response_data['attempts_left'] = attempts_left
+        
+        return jsonify(response_data), 401
+    
+    user.reset_failed_attempts()
+    db.session.commit()
     
     access_token = create_access_token(identity=str(user.id))
     

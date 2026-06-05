@@ -131,6 +131,8 @@ class User(db.Model):
     skills = db.Column(db.String(500), default='')
     role = db.Column(db.String(20), default='user')
     is_active = db.Column(db.Boolean, default=True)
+    failed_login_attempts = db.Column(db.Integer, default=0)
+    last_failed_login_at = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -144,6 +146,28 @@ class User(db.Model):
     
     def check_password(self, password):
         return bcrypt.check_password_hash(self.password_hash, password)
+    
+    def is_login_locked(self, max_attempts=5, window_minutes=30):
+        if self.failed_login_attempts >= max_attempts and self.last_failed_login_at:
+            time_since_last_failure = datetime.utcnow() - self.last_failed_login_at
+            if time_since_last_failure.total_seconds() < window_minutes * 60:
+                return True
+        return False
+    
+    def get_lock_remaining_seconds(self, window_minutes=30):
+        if not self.last_failed_login_at:
+            return 0
+        elapsed = (datetime.utcnow() - self.last_failed_login_at).total_seconds()
+        remaining = window_minutes * 60 - elapsed
+        return max(0, int(remaining))
+    
+    def increment_failed_attempts(self):
+        self.failed_login_attempts += 1
+        self.last_failed_login_at = datetime.utcnow()
+    
+    def reset_failed_attempts(self):
+        self.failed_login_attempts = 0
+        self.last_failed_login_at = None
     
     def get_notification_settings(self):
         settings = UserNotificationSettings.query.filter_by(user_id=self.id).first()
