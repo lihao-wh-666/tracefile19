@@ -1,8 +1,8 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from datetime import datetime
-from app.models import db, User, Project, ProjectMember, ChatRoom, ChatRoomMember, PROJECT_CHANNELS
-from app import log_operation_from_request
+from app.models import db, User, Project, ProjectMember, ChatRoom, ChatRoomMember, PROJECT_CHANNELS, PROJECT_ROLES, PROJECT_PERMISSIONS, get_role_permissions, has_permission, get_role_info
+from app import log_operation_from_request, check_project_permission, get_project_member_role
 
 projects_bp = Blueprint('projects', __name__)
 
@@ -131,12 +131,7 @@ def update_project(project_id):
     if not project:
         return jsonify({'error': '项目不存在'}), 404
     
-    membership = ProjectMember.query.filter_by(
-        project_id=project_id,
-        user_id=current_user_id
-    ).first()
-    
-    if not membership or membership.role not in ['owner', 'admin']:
+    if not check_project_permission(project_id, current_user_id, 'project_edit'):
         return jsonify({'error': '没有权限修改项目'}), 403
     
     if 'name' in data:
@@ -180,13 +175,8 @@ def delete_project(project_id):
     if not project:
         return jsonify({'error': '项目不存在'}), 404
     
-    membership = ProjectMember.query.filter_by(
-        project_id=project_id,
-        user_id=current_user_id
-    ).first()
-    
-    if not membership or membership.role != 'owner':
-        return jsonify({'error': '只有项目所有者可以删除项目'}), 403
+    if not check_project_permission(project_id, current_user_id, 'project_delete'):
+        return jsonify({'error': '没有权限删除项目'}), 403
     
     project_name = project.name
     db.session.delete(project)
@@ -365,12 +355,7 @@ def remove_project_member(project_id, user_id):
     if not project:
         return jsonify({'error': '项目不存在'}), 404
     
-    membership = ProjectMember.query.filter_by(
-        project_id=project_id,
-        user_id=current_user_id
-    ).first()
-    
-    if not membership or membership.role not in ['owner', 'admin']:
+    if not check_project_permission(project_id, current_user_id, 'project_manage_members'):
         return jsonify({'error': '没有权限移除成员'}), 403
     
     if user_id == current_user_id:
@@ -386,6 +371,13 @@ def remove_project_member(project_id, user_id):
     
     if target_member.role == 'owner':
         return jsonify({'error': '不能移除项目所有者'}), 403
+    
+    current_user_role = get_project_member_role(project_id, current_user_id)
+    current_user_rank = get_role_info(current_user_role).get('rank', 0)
+    target_rank = get_role_info(target_member.role).get('rank', 0)
+    
+    if target_rank >= current_user_rank and current_user_role != 'owner':
+        return jsonify({'error': '不能移除高于或等于自己角色的成员'}), 403
     
     for ch in PROJECT_CHANNELS:
         room = ChatRoom.query.filter_by(
@@ -412,3 +404,183 @@ def remove_project_member(project_id, user_id):
     )
     
     return jsonify({'message': '成员已移除'}), 200
+
+
+@projects_bp.route('/roles', methods=['GET'])
+def get_all_roles():
+    roles_list = []
+    for role_key, role_info in PROJECT_ROLES.items():
+        roles_list.append({
+            'key': role_key,
+            'name': role_info['name'],
+            'rank': role_info['rank'],
+            'color': role_info['color'],
+            'permissions': get_role_permissions(role_key)
+        })
+    roles_list.sort(key=lambda x: x['rank'], reverse=True)
+    return jsonify({'roles': roles_list}), 200
+
+
+@projects_bp.route('/permissions', methods=['GET'])
+def get_all_permissions():
+    permissions_list = []
+    for perm_key, perm_name in PROJECT_PERMISSIONS.items():
+        permissions_list.append({
+            'key': perm_key,
+            'name': perm_name
+        })
+    return jsonify({'permissions': permissions_list}), 200
+
+
+@projects_bp.route('/<int:project_id>/members/<int:user_id>/role', methods=['PUT'])
+@jwt_required()
+def update_member_role(project_id, user_id):
+    current_user_id = int(get_jwt_identity())
+    data = request.get_json()
+    new_role = data.get('role', '')
+    
+    if new_role not in PROJECT_ROLES:
+        return jsonify({'error': '无效的角色'}), 400
+    
+    if new_role == 'owner':
+        return jsonify({'error': '不能直接设置为所有者角色'}), 400
+    
+    if not check_project_permission(project_id, current_user_id, 'project_manage_roles'):
+        return jsonify({'error': '没有权限修改成员角色'}), 403
+    
+    current_user_role = get_project_member_role(project_id, current_user_id)
+    current_user_rank = get_role_info(current_user_role).get('rank', 0)
+    target_rank = get_role_info(new_role).get('rank', 0)
+    
+    if target_rank >= current_user_rank and current_user_role != 'owner':
+        return jsonify({'error': '不能设置高于或等于自己的角色'}), 403
+    
+    target_member = ProjectMember.query.filter_by(
+        project_id=project_id,
+        user_id=user_id
+    ).first()
+    
+    if not target_member:
+        return jsonify({'error': '用户不是项目成员'}), 404
+    
+    if target_member.role == 'owner':
+        return jsonify({'error': '不能修改项目所有者的角色'}), 403
+    
+    old_role = target_member.role
+    target_member.role = new_role
+    db.session.commit()
+    
+    log_operation_from_request(
+        operation_type='update_role',
+        target_type='project_member',
+        target_id=target_member.id,
+        user_id=current_user_id,
+        details={'project_id': project_id, 'user_id': user_id, 'old_role': old_role, 'new_role': new_role}
+    )
+    
+    return jsonify({
+        'message': '角色更新成功',
+        'member': target_member.to_dict()
+    }), 200
+
+
+@projects_bp.route('/<int:project_id>/members/add', methods=['POST'])
+@jwt_required()
+def add_project_member(project_id):
+    current_user_id = int(get_jwt_identity())
+    data = request.get_json()
+    
+    user_ids = data.get('user_ids', [])
+    role = data.get('role', 'member')
+    
+    if role not in PROJECT_ROLES:
+        return jsonify({'error': '无效的角色'}), 400
+    
+    if role == 'owner':
+        return jsonify({'error': '不能直接添加所有者'}), 400
+    
+    if not check_project_permission(project_id, current_user_id, 'project_manage_members'):
+        return jsonify({'error': '没有权限添加成员'}), 403
+    
+    current_user_role = get_project_member_role(project_id, current_user_id)
+    current_user_rank = get_role_info(current_user_role).get('rank', 0)
+    new_role_rank = get_role_info(role).get('rank', 0)
+    
+    if new_role_rank >= current_user_rank and current_user_role != 'owner':
+        return jsonify({'error': '不能添加高于或等于自己角色的成员'}), 403
+    
+    project = Project.query.get(project_id)
+    if not project:
+        return jsonify({'error': '项目不存在'}), 404
+    
+    added_count = 0
+    for uid in user_ids:
+        uid = int(uid)
+        if uid == current_user_id:
+            continue
+        existing = ProjectMember.query.filter_by(
+            project_id=project_id,
+            user_id=uid
+        ).first()
+        if existing:
+            continue
+        
+        user = User.query.get(uid)
+        if not user:
+            continue
+        
+        member = ProjectMember(
+            project_id=project_id,
+            user_id=uid,
+            role=role
+        )
+        db.session.add(member)
+        
+        for ch in PROJECT_CHANNELS:
+            room = ChatRoom.query.filter_by(
+                project_id=project_id,
+                channel_type=ch['key']
+            ).first()
+            if room:
+                room_member = ChatRoomMember(
+                    room_id=room.id,
+                    user_id=uid
+                )
+                db.session.add(room_member)
+        
+        added_count += 1
+    
+    db.session.commit()
+    
+    log_operation_from_request(
+        operation_type='add_members',
+        target_type='project',
+        target_id=project_id,
+        user_id=current_user_id,
+        details={'added_count': added_count, 'user_ids': user_ids, 'role': role}
+    )
+    
+    return jsonify({
+        'message': f'成功添加 {added_count} 名成员',
+        'added_count': added_count
+    }), 200
+
+
+@projects_bp.route('/<int:project_id>/my-role', methods=['GET'])
+@jwt_required()
+def get_my_project_role(project_id):
+    current_user_id = int(get_jwt_identity())
+    
+    membership = ProjectMember.query.filter_by(
+        project_id=project_id,
+        user_id=current_user_id
+    ).first()
+    
+    if not membership:
+        return jsonify({'error': '你不是该项目成员'}), 403
+    
+    return jsonify({
+        'role': membership.role,
+        'role_info': get_role_info(membership.role),
+        'permissions': get_role_permissions(membership.role)
+    }), 200

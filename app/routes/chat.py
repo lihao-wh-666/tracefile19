@@ -1,8 +1,8 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from datetime import datetime
-from app.models import db, User, ChatRoom, ChatRoomMember, ChatMessage, UserNotificationSettings
-from app import log_operation_from_request
+from app.models import db, User, ChatRoom, ChatRoomMember, ChatMessage, UserNotificationSettings, has_permission
+from app import log_operation_from_request, get_project_member_role
 
 chat_bp = Blueprint('chat', __name__)
 
@@ -119,6 +119,12 @@ def send_message(room_id):
     
     if not membership:
         return jsonify({'error': 'Not a member of this room'}), 403
+    
+    room = ChatRoom.query.get(room_id)
+    if room and room.type == 'project' and room.project_id:
+        role = get_project_member_role(room.project_id, current_user_id)
+        if not role or not has_permission(role, 'channel_send'):
+            return jsonify({'error': '没有权限在该频道发送消息'}), 403
     
     message = ChatMessage(
         room_id=room_id,

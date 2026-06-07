@@ -90,7 +90,9 @@ class CalendarComponent {
 
     async loadEvents() {
         const { start, end } = this.getDateRange();
-        const cacheKey = `${start.toISOString()}_${end.toISOString()}_${this.filterProject}_${this.filterType}_${this.filterResource}`;
+        const startStr = this.formatDateKey(start);
+        const endStr = this.formatDateKey(end);
+        const cacheKey = `${startStr}_${endStr}_${this.filterProject}_${this.filterType}_${this.filterResource}`;
         
         if (this.eventCache[cacheKey]) {
             this.events = this.eventCache[cacheKey];
@@ -99,8 +101,8 @@ class CalendarComponent {
         }
 
         const params = new URLSearchParams({
-            start: start.toISOString(),
-            end: end.toISOString()
+            start: startStr,
+            end: endStr
         });
         if (this.filterProject) params.append('project_id', this.filterProject);
         if (this.filterType) params.append('event_type', this.filterType);
@@ -273,7 +275,7 @@ class CalendarComponent {
                         <div class="week-hour-row">
                             <div class="time-label">${hour.toString().padStart(2, '0')}:00</div>
                             ${days.map((day, dayIdx) => `
-                                <div class="week-day-cell" data-date="${day.toDateString()}" data-hour="${hour}">
+                                <div class="week-day-cell" data-date="${this.formatDateKey(day)}" data-hour="${hour}">
                                     <div class="time-events"></div>
                                 </div>
                             `).join('')}
@@ -325,7 +327,7 @@ class CalendarComponent {
                 <div class="month-grid" id="month-grid">
                     ${days.map(({ date, isOtherMonth }) => `
                         <div class="month-cell ${isOtherMonth ? 'other-month' : ''} ${this.isToday(date) ? 'today' : ''}" 
-                             data-date="${date.toISOString().split('T')[0]}">
+                             data-date="${this.formatDateKey(date)}">
                             <div class="month-cell-header">
                                 <span class="cell-date">${date.getDate()}</span>
                             </div>
@@ -407,7 +409,7 @@ class CalendarComponent {
         events.forEach(event => {
             const start = new Date(event.start_time);
             const end = new Date(event.end_time);
-            const dateStr = start.toDateString();
+            const dateStr = this.formatDateKey(start);
 
             const cell = grid.querySelector(`[data-date="${dateStr}"] .time-events`);
             if (cell) {
@@ -444,7 +446,7 @@ class CalendarComponent {
         const eventsByDate = {};
 
         events.forEach(event => {
-            const dateKey = new Date(event.start_time).toISOString().split('T')[0];
+            const dateKey = this.formatDateKey(new Date(event.start_time));
             if (!eventsByDate[dateKey]) {
                 eventsByDate[dateKey] = [];
             }
@@ -488,7 +490,9 @@ class CalendarComponent {
             cell.addEventListener('click', () => {
                 const dateStr = cell.dataset.date;
                 if (this.onDateClick) {
-                    this.onDateClick(new Date(dateStr));
+                    const parts = dateStr.split('-');
+                    const date = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+                    this.onDateClick(date);
                 }
             });
         });
@@ -536,7 +540,9 @@ class CalendarComponent {
                 cell.classList.remove('drag-over');
                 if (this.draggedEvent && this.onEventDrop) {
                     const hour = parseInt(cell.dataset.hour);
-                    const date = new Date(cell.dataset.date);
+                    const dateStr = cell.dataset.date;
+                    const parts = dateStr.split('-');
+                    const date = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
                     date.setHours(hour, 0, 0, 0);
                     this.onEventDrop(this.draggedEvent, date);
                 }
@@ -571,6 +577,13 @@ class CalendarComponent {
 
     formatTime(date) {
         return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    formatDateKey(date) {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
     }
 
     addEvent(event) {

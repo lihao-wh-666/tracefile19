@@ -17,6 +17,112 @@ PROJECT_CHANNELS = [
 ]
 
 
+PROJECT_ROLES = {
+    'owner': {'name': '项目所有者', 'rank': 100, 'color': '#ef4444'},
+    'admin': {'name': '项目经理', 'rank': 90, 'color': '#f97316'},
+    'planner': {'name': '策划', 'rank': 70, 'color': '#8b5cf6'},
+    'programmer': {'name': '程序', 'rank': 60, 'color': '#3b82f6'},
+    'artist': {'name': '美术', 'rank': 60, 'color': '#10b981'},
+    'member': {'name': '成员', 'rank': 40, 'color': '#6b7280'},
+    'intern': {'name': '实习生', 'rank': 20, 'color': '#9ca3af'},
+}
+
+
+PROJECT_PERMISSIONS = {
+    'project_view': '查看项目',
+    'project_edit': '编辑项目信息',
+    'project_delete': '删除项目',
+    'project_manage_members': '管理项目成员',
+    'project_manage_roles': '管理成员角色',
+    'channel_view': '查看频道',
+    'channel_send': '发送消息',
+    'channel_manage': '管理频道',
+    'doc_view': '查看文档',
+    'doc_create': '创建文档',
+    'doc_edit': '编辑所有文档',
+    'doc_edit_own': '编辑自己的文档',
+    'doc_delete': '删除所有文档',
+    'doc_delete_own': '删除自己的文档',
+    'doc_manage_category': '管理文档分类',
+    'task_view': '查看任务',
+    'task_create': '创建任务',
+    'task_edit': '编辑任务',
+    'task_assign': '分配任务',
+    'task_delete': '删除任务',
+    'calendar_view': '查看日程',
+    'calendar_create': '创建日程',
+    'calendar_edit': '编辑日程',
+    'calendar_delete': '删除日程',
+}
+
+
+ROLE_PERMISSIONS = {
+    'owner': [
+        'project_view', 'project_edit', 'project_delete',
+        'project_manage_members', 'project_manage_roles',
+        'channel_view', 'channel_send', 'channel_manage',
+        'doc_view', 'doc_create', 'doc_edit', 'doc_delete', 'doc_manage_category',
+        'task_view', 'task_create', 'task_edit', 'task_assign', 'task_delete',
+        'calendar_view', 'calendar_create', 'calendar_edit', 'calendar_delete',
+    ],
+    'admin': [
+        'project_view', 'project_edit',
+        'project_manage_members', 'project_manage_roles',
+        'channel_view', 'channel_send', 'channel_manage',
+        'doc_view', 'doc_create', 'doc_edit', 'doc_delete', 'doc_manage_category',
+        'task_view', 'task_create', 'task_edit', 'task_assign', 'task_delete',
+        'calendar_view', 'calendar_create', 'calendar_edit', 'calendar_delete',
+    ],
+    'planner': [
+        'project_view',
+        'channel_view', 'channel_send',
+        'doc_view', 'doc_create', 'doc_edit', 'doc_delete', 'doc_manage_category',
+        'task_view', 'task_create', 'task_edit',
+        'calendar_view', 'calendar_create', 'calendar_edit',
+    ],
+    'programmer': [
+        'project_view',
+        'channel_view', 'channel_send',
+        'doc_view', 'doc_create', 'doc_edit_own', 'doc_delete_own',
+        'task_view', 'task_create',
+        'calendar_view',
+    ],
+    'artist': [
+        'project_view',
+        'channel_view', 'channel_send',
+        'doc_view', 'doc_create', 'doc_edit_own', 'doc_delete_own',
+        'task_view',
+        'calendar_view',
+    ],
+    'member': [
+        'project_view',
+        'channel_view', 'channel_send',
+        'doc_view', 'doc_create', 'doc_edit_own', 'doc_delete_own',
+        'task_view',
+        'calendar_view',
+    ],
+    'intern': [
+        'project_view',
+        'channel_view', 'channel_send',
+        'doc_view',
+        'task_view',
+        'calendar_view',
+    ],
+}
+
+
+def get_role_permissions(role):
+    return ROLE_PERMISSIONS.get(role, [])
+
+
+def has_permission(role, permission):
+    return permission in ROLE_PERMISSIONS.get(role, [])
+
+
+def get_role_info(role):
+    return PROJECT_ROLES.get(role, {'name': role, 'rank': 0, 'color': '#6b7280'})
+
+
 class Project(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
@@ -81,12 +187,17 @@ class ProjectMember(db.Model):
     def to_dict(self):
         from app import format_datetime_iso
         
+        role_info = get_role_info(self.role)
         return {
             'id': self.id,
             'project_id': self.project_id,
             'user_id': self.user_id,
             'user': self.user.to_dict(),
             'role': self.role,
+            'role_name': role_info['name'],
+            'role_color': role_info['color'],
+            'role_rank': role_info['rank'],
+            'permissions': get_role_permissions(self.role),
             'joined_at': format_datetime_iso(self.joined_at),
         }
 

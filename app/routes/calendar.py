@@ -5,8 +5,8 @@ import calendar
 import json
 import hashlib
 
-from app.models import db, User, Project, ProjectMember, ProjectMeeting, DeliveryTask, CalendarEvent, CalendarEventMember, EventReminder
-from app import log_operation_from_request, get_local_tz, to_local_time
+from app.models import db, User, Project, ProjectMember, ProjectMeeting, DeliveryTask, CalendarEvent, CalendarEventMember, EventReminder, has_permission, get_role_info
+from app import log_operation_from_request, get_local_tz, to_local_time, check_project_permission, get_project_member_role
 from app.services.notification_service import get_user_notifications, mark_notification_read, mark_all_notifications_read, get_unread_count
 
 calendar_bp = Blueprint('calendar', __name__)
@@ -199,10 +199,17 @@ def get_calendar_events():
                 events.append(_meeting_to_event(meeting, occ))
 
     if not event_type or event_type == 'delivery':
+        import pytz
+        local_tz = get_local_tz()
+        start_local = local_tz.localize(datetime.combine(start_date, time.min))
+        end_local = local_tz.localize(datetime.combine(end_date, time.max))
+        start_utc = start_local.astimezone(pytz.UTC).replace(tzinfo=None)
+        end_utc = end_local.astimezone(pytz.UTC).replace(tzinfo=None)
+
         delivery_query = DeliveryTask.query.filter(
             DeliveryTask.project_id.in_(project_ids),
-            DeliveryTask.deadline >= datetime.combine(start_date, time.min),
-            DeliveryTask.deadline <= datetime.combine(end_date, time.max)
+            DeliveryTask.deadline >= start_utc,
+            DeliveryTask.deadline <= end_utc
         )
 
         if resource_type:
@@ -213,10 +220,17 @@ def get_calendar_events():
             events.append(_delivery_to_event(task))
 
     if not event_type or event_type == 'general':
+        import pytz
+        local_tz = get_local_tz()
+        start_local = local_tz.localize(datetime.combine(start_date, time.min))
+        end_local = local_tz.localize(datetime.combine(end_date, time.max))
+        start_utc = start_local.astimezone(pytz.UTC).replace(tzinfo=None)
+        end_utc = end_local.astimezone(pytz.UTC).replace(tzinfo=None)
+
         general_events = CalendarEvent.query.filter(
             CalendarEvent.project_id.in_(project_ids),
-            CalendarEvent.start_time <= datetime.combine(end_date, time.max),
-            CalendarEvent.end_time >= datetime.combine(start_date, time.min)
+            CalendarEvent.start_time <= end_utc,
+            CalendarEvent.end_time >= start_utc
         ).all()
         for evt in general_events:
             events.append(evt.to_dict())
@@ -281,6 +295,9 @@ def create_meeting():
     ).first()
     if not membership:
         return jsonify({'error': '你不是该项目成员'}), 403
+
+    if not has_permission(membership.role, 'calendar_create'):
+        return jsonify({'error': '没有权限创建例会'}), 403
 
     try:
         start_time = time.fromisoformat(start_time_str)
@@ -353,9 +370,12 @@ def update_meeting(meeting_id):
         project_id=meeting.project_id,
         user_id=current_user_id
     ).first()
-    if not membership or membership.role not in ['owner', 'admin']:
-        if meeting.created_by != current_user_id:
-            return jsonify({'error': '没有权限修改此例会'}), 403
+    if not membership:
+        return jsonify({'error': '你不是该项目成员'}), 403
+
+    can_edit = has_permission(membership.role, 'calendar_edit')
+    if not can_edit and meeting.created_by != current_user_id:
+        return jsonify({'error': '没有权限修改此例会'}), 403
 
     if 'title' in data:
         title = data['title'].strip()
@@ -438,9 +458,12 @@ def delete_meeting(meeting_id):
         project_id=meeting.project_id,
         user_id=current_user_id
     ).first()
-    if not membership or membership.role not in ['owner', 'admin']:
-        if meeting.created_by != current_user_id:
-            return jsonify({'error': '没有权限删除此例会'}), 403
+    if not membership:
+        return jsonify({'error': '你不是该项目成员'}), 403
+
+    can_delete = has_permission(membership.role, 'calendar_delete')
+    if not can_delete and meeting.created_by != current_user_id:
+        return jsonify({'error': '没有权限删除此例会'}), 403
 
     meeting_title = meeting.title
     db.session.delete(meeting)
@@ -510,6 +533,9 @@ def create_delivery():
     ).first()
     if not membership:
         return jsonify({'error': '你不是该项目成员'}), 403
+
+    if not has_permission(membership.role, 'task_create'):
+        return jsonify({'error': '没有权限创建交付任务'}), 403
 
     try:
         local_tz = get_local_tz()
@@ -584,6 +610,11 @@ def update_delivery(task_id):
     if not membership:
         return jsonify({'error': '你不是该项目成员'}), 403
 
+    can_edit = has_permission(membership.role, 'task_edit')
+    if not can_edit and task.created_by != current_user_id:
+        if task.assignee_id != current_user_id or 'status' not in data:
+            return jsonify({'error': '没有权限修改此任务'}), 403
+
     if 'title' in data:
         title = data['title'].strip()
         if not title:
@@ -654,9 +685,12 @@ def delete_delivery(task_id):
         project_id=task.project_id,
         user_id=current_user_id
     ).first()
-    if not membership or membership.role not in ['owner', 'admin']:
-        if task.created_by != current_user_id:
-            return jsonify({'error': '没有权限删除此任务'}), 403
+    if not membership:
+        return jsonify({'error': '你不是该项目成员'}), 403
+
+    can_delete = has_permission(membership.role, 'task_delete')
+    if not can_delete and task.created_by != current_user_id:
+        return jsonify({'error': '没有权限删除此任务'}), 403
 
     task_title = task.title
     db.session.delete(task)
@@ -713,6 +747,8 @@ def create_general_event():
         ).first()
         if not membership:
             return jsonify({'error': '你不是该项目成员'}), 403
+        if not has_permission(membership.role, 'calendar_create'):
+            return jsonify({'error': '没有权限创建日程'}), 403
 
     event = CalendarEvent(
         project_id=project_id,
@@ -756,15 +792,19 @@ def update_general_event(event_id):
     if not event:
         return jsonify({'error': '事件不存在'}), 404
 
-    if event.created_by != current_user_id:
-        membership = None
-        if event.project_id:
-            membership = ProjectMember.query.filter_by(
-                project_id=event.project_id,
-                user_id=current_user_id
-            ).first()
-        if not membership or membership.role not in ['owner', 'admin']:
-            return jsonify({'error': '没有权限修改此事件'}), 403
+    can_edit = False
+    if event.created_by == current_user_id:
+        can_edit = True
+    elif event.project_id:
+        membership = ProjectMember.query.filter_by(
+            project_id=event.project_id,
+            user_id=current_user_id
+        ).first()
+        if membership and has_permission(membership.role, 'calendar_edit'):
+            can_edit = True
+
+    if not can_edit:
+        return jsonify({'error': '没有权限修改此事件'}), 403
 
     import pytz
     if 'start_time' in data:
@@ -834,15 +874,19 @@ def delete_general_event(event_id):
     if not event:
         return jsonify({'error': '事件不存在'}), 404
 
-    if event.created_by != current_user_id:
-        membership = None
-        if event.project_id:
-            membership = ProjectMember.query.filter_by(
-                project_id=event.project_id,
-                user_id=current_user_id
-            ).first()
-        if not membership or membership.role not in ['owner', 'admin']:
-            return jsonify({'error': '没有权限删除此事件'}), 403
+    can_delete = False
+    if event.created_by == current_user_id:
+        can_delete = True
+    elif event.project_id:
+        membership = ProjectMember.query.filter_by(
+            project_id=event.project_id,
+            user_id=current_user_id
+        ).first()
+        if membership and has_permission(membership.role, 'calendar_delete'):
+            can_delete = True
+
+    if not can_delete:
+        return jsonify({'error': '没有权限删除此事件'}), 403
 
     event_title = event.title
     db.session.delete(event)

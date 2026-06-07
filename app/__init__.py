@@ -7,7 +7,7 @@ import pytz
 import json
 
 from config import Config
-from app.models import db, bcrypt, jwt, User, IdeaCard, OperationLog
+from app.models import db, bcrypt, jwt, User, IdeaCard, OperationLog, ProjectMember, has_permission, get_role_info, PROJECT_ROLES, PROJECT_PERMISSIONS, get_role_permissions
 from app.services.reminder_scheduler import reminder_scheduler
 
 socketio = SocketIO(cors_allowed_origins="*", async_mode='threading', logger=False, engineio_logger=False, ping_timeout=60, ping_interval=25)
@@ -61,6 +61,55 @@ def log_operation_from_request(operation_type, target_type, target_id=None, user
     except Exception as e:
         print(f"Error logging operation from request: {e}")
         return None
+
+
+def get_project_member_role(project_id, user_id):
+    membership = ProjectMember.query.filter_by(
+        project_id=project_id,
+        user_id=user_id
+    ).first()
+    return membership.role if membership else None
+
+
+def check_project_permission(project_id, user_id, permission):
+    role = get_project_member_role(project_id, user_id)
+    if not role:
+        return False
+    return has_permission(role, permission)
+
+
+def project_permission_required(permission, project_id_param='project_id'):
+    from functools import wraps
+    from flask_jwt_extended import jwt_required, get_jwt_identity
+    from flask import request, jsonify
+    
+    def decorator(fn):
+        @wraps(fn)
+        @jwt_required()
+        def wrapper(*args, **kwargs):
+            current_user_id = int(get_jwt_identity())
+            
+            pid = kwargs.get(project_id_param)
+            if pid is None:
+                pid = request.view_args.get(project_id_param)
+            if pid is None:
+                data = request.get_json(silent=True) or {}
+                pid = data.get(project_id_param)
+            
+            if pid is None:
+                return jsonify({'error': '缺少项目ID参数'}), 400
+            
+            if not check_project_permission(pid, current_user_id, permission):
+                return jsonify({'error': '没有权限执行此操作'}), 403
+            
+            return fn(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+def project_owner_or_admin_required(project_id_param='project_id'):
+    return project_permission_required('project_manage_roles', project_id_param)
+
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC_DIR = os.path.join(BASE_DIR, 'static')
