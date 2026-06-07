@@ -84,6 +84,7 @@ def create_app(config_class=Config):
     from app.routes.admin import admin_bp
     from app.routes.chat import chat_bp
     from app.routes.projects import projects_bp
+    from app.routes.calendar import calendar_bp
     
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(ideas_bp, url_prefix='/api/ideas')
@@ -91,6 +92,7 @@ def create_app(config_class=Config):
     app.register_blueprint(admin_bp, url_prefix='/api/admin')
     app.register_blueprint(chat_bp, url_prefix='/api/chat')
     app.register_blueprint(projects_bp, url_prefix='/api/projects')
+    app.register_blueprint(calendar_bp, url_prefix='/api/calendar')
     
     @app.route('/')
     def index():

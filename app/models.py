@@ -398,3 +398,139 @@ class OperationLog(db.Model):
             'user_agent': self.user_agent,
             'created_at': format_datetime_iso(self.created_at)
         }
+
+
+class ProjectMeeting(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    project_id = db.Column(db.Integer, db.ForeignKey('project.id'), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, default='')
+    recurrence_type = db.Column(db.String(20), default='weekly')  # 'daily', 'weekly', 'monthly', 'once'
+    recurrence_day = db.Column(db.Integer)  # 周几(0-6)或每月几号(1-31)
+    start_time = db.Column(db.Time, nullable=False)
+    end_time = db.Column(db.Time, nullable=False)
+    location = db.Column(db.String(500), default='')
+    meeting_link = db.Column(db.String(500), default='')
+    start_date = db.Column(db.Date, nullable=False)
+    end_date = db.Column(db.Date)
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    is_active = db.Column(db.Boolean, default=True)
+
+    project = db.relationship('Project', backref='meetings')
+    creator = db.relationship('User', backref='created_meetings', foreign_keys=[created_by])
+
+    def to_dict(self):
+        from app import format_datetime_iso
+        
+        return {
+            'id': self.id,
+            'project_id': self.project_id,
+            'project_name': self.project.name if self.project else '',
+            'title': self.title,
+            'description': self.description,
+            'recurrence_type': self.recurrence_type,
+            'recurrence_day': self.recurrence_day,
+            'start_time': self.start_time.isoformat() if self.start_time else None,
+            'end_time': self.end_time.isoformat() if self.end_time else None,
+            'location': self.location,
+            'meeting_link': self.meeting_link,
+            'start_date': self.start_date.isoformat() if self.start_date else None,
+            'end_date': self.end_date.isoformat() if self.end_date else None,
+            'created_by': self.created_by,
+            'creator': self.creator.to_dict() if self.creator else None,
+            'created_at': format_datetime_iso(self.created_at),
+            'updated_at': format_datetime_iso(self.updated_at),
+            'is_active': self.is_active
+        }
+
+
+class DeliveryTask(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    project_id = db.Column(db.Integer, db.ForeignKey('project.id'), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, default='')
+    resource_type = db.Column(db.String(50), default='general')  # 'art', 'code', 'document', 'sound', 'general'
+    deadline = db.Column(db.DateTime, nullable=False)
+    assignee_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    status = db.Column(db.String(20), default='pending')  # 'pending', 'in_progress', 'completed', 'delayed'
+    priority = db.Column(db.String(20), default='medium')  # 'low', 'medium', 'high', 'urgent'
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    project = db.relationship('Project', backref='delivery_tasks')
+    assignee = db.relationship('User', backref='assigned_deliveries', foreign_keys=[assignee_id])
+    creator = db.relationship('User', backref='created_deliveries', foreign_keys=[created_by])
+
+    def to_dict(self):
+        from app import format_datetime_iso
+        
+        return {
+            'id': self.id,
+            'project_id': self.project_id,
+            'project_name': self.project.name if self.project else '',
+            'title': self.title,
+            'description': self.description,
+            'resource_type': self.resource_type,
+            'deadline': format_datetime_iso(self.deadline),
+            'assignee_id': self.assignee_id,
+            'assignee': self.assignee.to_dict() if self.assignee else None,
+            'status': self.status,
+            'priority': self.priority,
+            'created_by': self.created_by,
+            'creator': self.creator.to_dict() if self.creator else None,
+            'created_at': format_datetime_iso(self.created_at),
+            'updated_at': format_datetime_iso(self.updated_at)
+        }
+
+
+class CalendarEvent(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    project_id = db.Column(db.Integer, db.ForeignKey('project.id'))
+    title = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, default='')
+    event_type = db.Column(db.String(30), default='general')  # 'meeting', 'delivery', 'general', 'reminder'
+    event_source_id = db.Column(db.Integer)  # 关联的源ID（会议ID、交付任务ID等）
+    start_time = db.Column(db.DateTime, nullable=False)
+    end_time = db.Column(db.DateTime, nullable=False)
+    location = db.Column(db.String(500), default='')
+    meeting_link = db.Column(db.String(500), default='')
+    color = db.Column(db.String(20), default='#6366f1')
+    is_all_day = db.Column(db.Boolean, default=False)
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    project = db.relationship('Project', backref='calendar_events')
+    creator = db.relationship('User', backref='calendar_events', foreign_keys=[created_by])
+
+    __table_args__ = (
+        db.Index('idx_calendar_event_time', 'start_time', 'end_time'),
+        db.Index('idx_calendar_event_project', 'project_id'),
+        db.Index('idx_calendar_event_type', 'event_type'),
+    )
+
+    def to_dict(self):
+        from app import format_datetime_iso
+        
+        return {
+            'id': self.id,
+            'project_id': self.project_id,
+            'project_name': self.project.name if self.project else '',
+            'title': self.title,
+            'description': self.description,
+            'event_type': self.event_type,
+            'event_source_id': self.event_source_id,
+            'start_time': format_datetime_iso(self.start_time),
+            'end_time': format_datetime_iso(self.end_time),
+            'location': self.location,
+            'meeting_link': self.meeting_link,
+            'color': self.color,
+            'is_all_day': self.is_all_day,
+            'created_by': self.created_by,
+            'creator': self.creator.to_dict() if self.creator else None,
+            'created_at': format_datetime_iso(self.created_at),
+            'updated_at': format_datetime_iso(self.updated_at)
+        }

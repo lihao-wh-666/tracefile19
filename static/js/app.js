@@ -54,6 +54,7 @@ class App {
         const navCreate = document.getElementById('nav-create');
         const navAdmin = document.getElementById('nav-admin');
         const navProjects = document.getElementById('nav-projects');
+        const navCalendar = document.getElementById('nav-calendar');
         const navChat = document.getElementById('nav-chat');
         const userGreeting = document.getElementById('user-greeting');
         const avatarImg = document.getElementById('avatar-img');
@@ -72,6 +73,7 @@ class App {
             navUser.style.display = 'flex';
             navCreate.style.display = 'block';
             navProjects.style.display = 'block';
+            navCalendar.style.display = 'block';
             navChat.style.display = 'block';
             userGreeting.textContent = `你好, ${auth.currentUser.username}`;
             avatarImg.src = auth.currentUser.avatar && auth.currentUser.avatar !== 'default.png'
@@ -101,6 +103,7 @@ class App {
             navUser.style.display = 'none';
             navCreate.style.display = 'none';
             navProjects.style.display = 'none';
+            navCalendar.style.display = 'none';
             navAdmin.style.display = 'none';
             navChat.style.display = 'none';
 
@@ -199,6 +202,9 @@ class App {
                 break;
             case 'project':
                 this.renderProjectDetail(main, this.currentParams.id);
+                break;
+            case 'calendar':
+                this.renderCalendar(main);
                 break;
             case 'chat':
                 this.renderChat(main, this.currentParams.id);
@@ -1720,6 +1726,843 @@ class App {
         
         if (!window.paginationCallbacks) window.paginationCallbacks = {};
         window.paginationCallbacks[containerId] = onChange;
+    }
+
+    async renderCalendar(container) {
+        if (!auth.isLoggedIn()) {
+            navigate('login');
+            return;
+        }
+
+        this.currentCalendarTab = 'calendar';
+
+        container.innerHTML = `
+            <div class="page-header">
+                <h1>日程日历</h1>
+                <div style="display: flex; gap: 0.5rem;">
+                    <button class="btn btn-primary" onclick="app.showCreateEventModal()">+ 新建日程</button>
+                </div>
+            </div>
+
+            <div class="calendar-tabs">
+                <div class="calendar-tab active" data-tab="calendar" onclick="app.switchCalendarTab('calendar')">📅 日历视图</div>
+                <div class="calendar-tab" data-tab="meetings" onclick="app.switchCalendarTab('meetings')">📋 项目例会</div>
+                <div class="calendar-tab" data-tab="deliveries" onclick="app.switchCalendarTab('deliveries')">📦 交付截止</div>
+            </div>
+
+            <div class="filters">
+                <div class="filter-group">
+                    <label>搜索</label>
+                    <input type="text" id="calendar-search" placeholder="搜索日程..." oninput="debounce(() => app.searchCalendarEvents(), 300)()">
+                </div>
+                <div class="filter-group">
+                    <label>项目</label>
+                    <select id="calendar-project-filter" onchange="app.filterCalendar()">
+                        <option value="">全部项目</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>类型</label>
+                    <select id="calendar-type-filter" onchange="app.filterCalendar()">
+                        <option value="">全部类型</option>
+                        <option value="meeting">项目例会</option>
+                        <option value="delivery">交付任务</option>
+                        <option value="general">普通日程</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>资源类型</label>
+                    <select id="calendar-resource-filter" onchange="app.filterCalendar()">
+                        <option value="">全部资源</option>
+                        <option value="art">美术资源</option>
+                        <option value="code">程序代码</option>
+                        <option value="document">文档</option>
+                        <option value="sound">音效音乐</option>
+                        <option value="general">其他</option>
+                    </select>
+                </div>
+            </div>
+
+            <div id="calendar-stats" class="calendar-stats">
+                <div class="loading"><div class="spinner"></div></div>
+            </div>
+
+            <div id="calendar-container"></div>
+
+            <div id="event-modal" class="modal" style="display: none;">
+                <div class="modal-content" style="max-width: 600px;">
+                    <div class="modal-header">
+                        <h3 id="event-modal-title">新建日程</h3>
+                        <button class="modal-close" onclick="app.hideEventModal()">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <form id="event-form">
+                            <div class="form-group">
+                                <label>标题 *</label>
+                                <input type="text" name="title" required maxlength="200" placeholder="日程标题">
+                            </div>
+                            <div class="form-group">
+                                <label>类型</label>
+                                <select name="event_type" id="event-type-select" onchange="app.updateEventTypeOptions()">
+                                    <option value="general">普通日程</option>
+                                    <option value="meeting">项目例会</option>
+                                    <option value="delivery">交付任务</option>
+                                </select>
+                            </div>
+                            <div class="form-group" id="event-project-group">
+                                <label>关联项目</label>
+                                <select name="project_id" id="event-project-select">
+                                    <option value="">不关联</option>
+                                </select>
+                            </div>
+                            <div class="form-group" id="event-start-group">
+                                <label>开始时间 *</label>
+                                <input type="datetime-local" name="start_time" required>
+                            </div>
+                            <div class="form-group" id="event-end-group">
+                                <label>结束时间 *</label>
+                                <input type="datetime-local" name="end_time" required>
+                            </div>
+                            <div class="form-group">
+                                <label>地点/会议室</label>
+                                <input type="text" name="location" placeholder="例如：会议室A / 腾讯会议">
+                            </div>
+                            <div class="form-group">
+                                <label>会议链接</label>
+                                <input type="url" name="meeting_link" placeholder="https://...">
+                            </div>
+                            <div class="form-group">
+                                <label>颜色标记</label>
+                                <select name="color">
+                                    <option value="#6366f1">紫色（默认）</option>
+                                    <option value="#8b5cf6">深紫</option>
+                                    <option value="#ec4899">粉色</option>
+                                    <option value="#06b6d4">青色</option>
+                                    <option value="#10b981">绿色</option>
+                                    <option value="#f59e0b">橙色</option>
+                                    <option value="#ef4444">红色</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>描述</label>
+                                <textarea name="description" rows="3" placeholder="详细描述..."></textarea>
+                            </div>
+                            <div class="form-group" id="meeting-options-group" style="display: none;">
+                                <label>
+                                    <input type="checkbox" id="is-recurring-meeting" onchange="app.toggleRecurringOptions()">
+                                    重复例会
+                                </label>
+                            </div>
+                            <div id="recurring-options" style="display: none;">
+                                <div class="form-group">
+                                    <label>重复周期</label>
+                                    <select name="recurrence_type" id="recurrence-type">
+                                        <option value="weekly">每周</option>
+                                        <option value="daily">每天</option>
+                                        <option value="monthly">每月</option>
+                                        <option value="once">单次</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" id="recurrence-day-group">
+                                    <label>周几</label>
+                                    <select name="recurrence_day" id="recurrence-day">
+                                        <option value="1">周一</option>
+                                        <option value="2">周二</option>
+                                        <option value="3">周三</option>
+                                        <option value="4">周四</option>
+                                        <option value="5">周五</option>
+                                        <option value="6">周六</option>
+                                        <option value="0">周日</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>开始日期</label>
+                                    <input type="date" name="start_date" id="meeting-start-date">
+                                </div>
+                                <div class="form-group">
+                                    <label>结束日期（可选）</label>
+                                    <input type="date" name="end_date" id="meeting-end-date">
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-outline" onclick="app.hideEventModal()">取消</button>
+                        <button class="btn btn-primary" onclick="app.saveEvent()">保存</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="event-detail-modal" class="event-detail-modal" style="display: none;">
+                <div class="event-detail-content">
+                    <div class="event-detail-header">
+                        <div>
+                            <span class="event-type-badge" id="detail-event-type">普通日程</span>
+                            <h3 id="detail-event-title"></h3>
+                        </div>
+                        <button class="modal-close" onclick="app.hideEventDetailModal()">&times;</button>
+                    </div>
+                    <div class="event-detail-body">
+                        <div class="event-detail-item">
+                            <div class="item-icon">⏰</div>
+                            <div class="item-content">
+                                <div class="item-label">时间</div>
+                                <div id="detail-event-time"></div>
+                            </div>
+                        </div>
+                        <div class="event-detail-item">
+                            <div class="item-icon">📍</div>
+                            <div class="item-content">
+                                <div class="item-label">地点</div>
+                                <div id="detail-event-location"></div>
+                            </div>
+                        </div>
+                        <div class="event-detail-item" id="detail-link-item">
+                            <div class="item-icon">🔗</div>
+                            <div class="item-content">
+                                <div class="item-label">会议链接</div>
+                                <div><a id="detail-event-link" href="#" target="_blank"></a></div>
+                            </div>
+                        </div>
+                        <div class="event-detail-item" id="detail-project-item">
+                            <div class="item-icon">📁</div>
+                            <div class="item-content">
+                                <div class="item-label">项目</div>
+                                <div id="detail-event-project"></div>
+                            </div>
+                        </div>
+                        <div class="event-detail-item" id="detail-desc-item">
+                            <div class="item-icon">📝</div>
+                            <div class="item-content">
+                                <div class="item-label">描述</div>
+                                <div id="detail-event-desc"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="event-detail-footer">
+                        <button class="btn btn-danger btn-sm" id="delete-event-btn" onclick="app.deleteCurrentEvent()">删除</button>
+                        <button class="btn btn-primary btn-sm" id="edit-event-btn" onclick="app.editCurrentEvent()">编辑</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="meetings-list-container" style="display: none;">
+                <div class="page-header" style="margin-bottom: 1rem;">
+                    <h3>项目例会</h3>
+                    <button class="btn btn-primary btn-sm" onclick="app.showCreateMeetingModal()">+ 创建例会</button>
+                </div>
+                <div id="meetings-list" class="meeting-list">
+                    <div class="loading"><div class="spinner"></div></div>
+                </div>
+            </div>
+
+            <div id="deliveries-list-container" style="display: none;">
+                <div class="page-header" style="margin-bottom: 1rem;">
+                    <h3>资源交付任务</h3>
+                    <button class="btn btn-primary btn-sm" onclick="app.showCreateDeliveryModal()">+ 添加交付任务</button>
+                </div>
+                <div id="deliveries-list" class="delivery-list">
+                    <div class="loading"><div class="spinner"></div></div>
+                </div>
+            </div>
+        `;
+
+        await Promise.all([
+            this.loadCalendarProjects(),
+            this.loadCalendarStats()
+        ]);
+
+        this.initCalendar();
+    }
+
+    async loadCalendarProjects() {
+        try {
+            const result = await api.get('/projects');
+            const select = document.getElementById('calendar-project-filter');
+            const eventSelect = document.getElementById('event-project-select');
+            if (result.projects) {
+                result.projects.forEach(p => {
+                    const opt1 = document.createElement('option');
+                    opt1.value = p.id;
+                    opt1.textContent = p.name;
+                    select.appendChild(opt1);
+
+                    const opt2 = document.createElement('option');
+                    opt2.value = p.id;
+                    opt2.textContent = p.name;
+                    eventSelect.appendChild(opt2);
+                });
+            }
+        } catch (error) {
+            console.error('加载项目列表失败:', error);
+        }
+    }
+
+    async loadCalendarStats() {
+        try {
+            const result = await api.get('/calendar/summary');
+            const summary = result.summary;
+            const container = document.getElementById('calendar-stats');
+            
+            container.innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-value">${summary.deliveries_today}</div>
+                    <div class="stat-label">今日交付</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${summary.deliveries_this_week}</div>
+                    <div class="stat-label">本周交付</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${summary.deliveries_this_month}</div>
+                    <div class="stat-label">本月交付</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${summary.active_meetings}</div>
+                    <div class="stat-label">活跃例会</div>
+                </div>
+            `;
+        } catch (error) {
+            document.getElementById('calendar-stats').innerHTML = '';
+        }
+    }
+
+    initCalendar() {
+        const container = document.getElementById('calendar-container');
+        if (!container) return;
+
+        calendarInstance = new CalendarComponent(container, {
+            viewMode: 'month',
+            onEventClick: (event) => this.showEventDetail(event),
+            onDateClick: (date) => this.showCreateEventModal(date),
+            onEventDrop: (event, newDate) => this.handleEventDrop(event, newDate)
+        });
+    }
+
+    switchCalendarTab(tab) {
+        this.currentCalendarTab = tab;
+
+        document.querySelectorAll('.calendar-tab').forEach(t => t.classList.remove('active'));
+        document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+
+        document.getElementById('calendar-container').style.display = tab === 'calendar' ? 'block' : 'none';
+        document.getElementById('meetings-list-container').style.display = tab === 'meetings' ? 'block' : 'none';
+        document.getElementById('deliveries-list-container').style.display = tab === 'deliveries' ? 'block' : 'none';
+
+        if (tab === 'meetings') {
+            this.loadMeetingsList();
+        } else if (tab === 'deliveries') {
+            this.loadDeliveriesList();
+        }
+    }
+
+    filterCalendar() {
+        if (!calendarInstance) return;
+
+        const projectFilter = document.getElementById('calendar-project-filter').value;
+        const typeFilter = document.getElementById('calendar-type-filter').value;
+        const resourceFilter = document.getElementById('calendar-resource-filter').value;
+
+        calendarInstance.setFilter('project', projectFilter);
+        calendarInstance.setFilter('type', typeFilter);
+        calendarInstance.setFilter('resource', resourceFilter);
+    }
+
+    searchCalendarEvents() {
+        if (!calendarInstance) return;
+        const query = document.getElementById('calendar-search').value;
+        calendarInstance.setFilter('search', query);
+    }
+
+    showCreateEventModal(date = null) {
+        this.editingEvent = null;
+        this.editingEventId = null;
+
+        document.getElementById('event-modal-title').textContent = '新建日程';
+        document.getElementById('event-form').reset();
+
+        const typeSelect = document.getElementById('event-type-select');
+        typeSelect.value = 'general';
+        this.updateEventTypeOptions();
+
+        if (date) {
+            const startInput = document.querySelector('[name="start_time"]');
+            const endInput = document.querySelector('[name="end_time"]');
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            startInput.value = `${year}-${month}-${day}T09:00`;
+            endInput.value = `${year}-${month}-${day}T10:00`;
+        }
+
+        document.getElementById('event-modal').style.display = 'flex';
+    }
+
+    hideEventModal() {
+        document.getElementById('event-modal').style.display = 'none';
+    }
+
+    updateEventTypeOptions() {
+        const eventType = document.getElementById('event-type-select').value;
+        const meetingOptions = document.getElementById('meeting-options-group');
+        const recurringOptions = document.getElementById('recurring-options');
+
+        if (eventType === 'meeting') {
+            meetingOptions.style.display = 'block';
+        } else {
+            meetingOptions.style.display = 'none';
+            recurringOptions.style.display = 'none';
+            document.getElementById('is-recurring-meeting').checked = false;
+        }
+    }
+
+    toggleRecurringOptions() {
+        const checkbox = document.getElementById('is-recurring-meeting');
+        const options = document.getElementById('recurring-options');
+        options.style.display = checkbox.checked ? 'block' : 'none';
+
+        if (checkbox.checked) {
+            const startDate = document.querySelector('[name="start_time"]').value?.split('T')[0];
+            if (startDate) {
+                document.getElementById('meeting-start-date').value = startDate;
+            }
+        }
+    }
+
+    async saveEvent() {
+        const form = document.getElementById('event-form');
+        const formData = new FormData(form);
+        const eventType = formData.get('event_type');
+
+        try {
+            if (eventType === 'meeting' && document.getElementById('is-recurring-meeting').checked) {
+                await this.createMeetingFromForm();
+            } else if (eventType === 'meeting') {
+                await this.createSingleMeeting();
+            } else {
+                await this.createGeneralEvent();
+            }
+            this.hideEventModal();
+            if (calendarInstance) {
+                calendarInstance.clearCache();
+                calendarInstance.loadEvents();
+            }
+            this.loadCalendarStats();
+            showToast('日程创建成功！', 'success');
+        } catch (error) {
+            showToast(error.message, 'error');
+        }
+    }
+
+    async createGeneralEvent() {
+        const form = document.getElementById('event-form');
+        const formData = new FormData(form);
+
+        const projectId = formData.get('project_id');
+        const data = {
+            title: formData.get('title'),
+            description: formData.get('description') || '',
+            start_time: formData.get('start_time'),
+            end_time: formData.get('end_time'),
+            location: formData.get('location') || '',
+            meeting_link: formData.get('meeting_link') || '',
+            color: formData.get('color') || '#6366f1',
+            event_type: 'general'
+        };
+
+        if (projectId) {
+            data.project_id = parseInt(projectId);
+        }
+
+        if (this.editingEventId && !this.editingEventId.toString().startsWith('meeting_') && !this.editingEventId.toString().startsWith('delivery_')) {
+            await api.put(`/calendar/events/${this.editingEventId}`, data);
+        } else {
+            await api.post('/calendar/events/general', data);
+        }
+    }
+
+    async createMeetingFromForm() {
+        const form = document.getElementById('event-form');
+        const formData = new FormData(form);
+
+        const projectId = formData.get('project_id');
+        if (!projectId) {
+            throw new Error('例会需要关联项目');
+        }
+
+        const startTime = formData.get('start_time')?.split('T')[1];
+        const endTime = formData.get('end_time')?.split('T')[1];
+
+        const data = {
+            project_id: parseInt(projectId),
+            title: formData.get('title'),
+            description: formData.get('description') || '',
+            recurrence_type: formData.get('recurrence_type') || 'weekly',
+            start_time: startTime,
+            end_time: endTime,
+            start_date: formData.get('start_date'),
+            location: formData.get('location') || '',
+            meeting_link: formData.get('meeting_link') || ''
+        };
+
+        const recType = formData.get('recurrence_type');
+        if (recType === 'weekly') {
+            data.recurrence_day = parseInt(formData.get('recurrence_day'));
+        } else if (recType === 'monthly') {
+            const startDate = new Date(formData.get('start_date'));
+            data.recurrence_day = startDate.getDate();
+        }
+
+        const endDate = formData.get('end_date');
+        if (endDate) {
+            data.end_date = endDate;
+        }
+
+        await api.post('/calendar/meetings', data);
+    }
+
+    async createSingleMeeting() {
+        const form = document.getElementById('event-form');
+        const formData = new FormData(form);
+
+        const projectId = formData.get('project_id');
+        const startDateTime = formData.get('start_time');
+        const startDate = startDateTime?.split('T')[0];
+        const startTime = startDateTime?.split('T')[1];
+        const endTime = formData.get('end_time')?.split('T')[1];
+
+        const data = {
+            project_id: parseInt(projectId),
+            title: formData.get('title'),
+            description: formData.get('description') || '',
+            recurrence_type: 'once',
+            start_time: startTime,
+            end_time: endTime,
+            start_date: startDate,
+            location: formData.get('location') || '',
+            meeting_link: formData.get('meeting_link') || ''
+        };
+
+        await api.post('/calendar/meetings', data);
+    }
+
+    showEventDetail(event) {
+        this.currentEvent = event;
+
+        const typeNames = {
+            meeting: '项目例会',
+            delivery: '交付任务',
+            general: '普通日程'
+        };
+
+        document.getElementById('detail-event-type').textContent = typeNames[event.event_type] || '日程';
+        document.getElementById('detail-event-type').className = `event-type-badge ${event.event_type}`;
+        document.getElementById('detail-event-title').textContent = event.title;
+
+        const startTime = new Date(event.start_time);
+        const endTime = new Date(event.end_time);
+        const timeStr = `${startTime.toLocaleString('zh-CN')} - ${endTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
+        document.getElementById('detail-event-time').textContent = timeStr;
+
+        document.getElementById('detail-event-location').textContent = event.location || '未设置';
+        document.getElementById('detail-event-project').textContent = event.project_name || '未关联';
+
+        const linkItem = document.getElementById('detail-link-item');
+        const linkEl = document.getElementById('detail-event-link');
+        if (event.meeting_link) {
+            linkItem.style.display = 'flex';
+            linkEl.href = event.meeting_link;
+            linkEl.textContent = event.meeting_link;
+        } else {
+            linkItem.style.display = 'none';
+        }
+
+        const descEl = document.getElementById('detail-event-desc');
+        const descItem = document.getElementById('detail-desc-item');
+        if (event.description) {
+            descItem.style.display = 'flex';
+            descEl.textContent = event.description;
+        } else {
+            descItem.style.display = 'none';
+        }
+
+        const canEdit = event.event_type === 'general' && !event.id.toString().startsWith('meeting_') && !event.id.toString().startsWith('delivery_');
+        document.getElementById('edit-event-btn').style.display = canEdit ? 'inline-flex' : 'none';
+        document.getElementById('delete-event-btn').style.display = canEdit ? 'inline-flex' : 'none';
+
+        document.getElementById('event-detail-modal').style.display = 'flex';
+    }
+
+    hideEventDetailModal() {
+        document.getElementById('event-detail-modal').style.display = 'none';
+        this.currentEvent = null;
+    }
+
+    editCurrentEvent() {
+        if (!this.currentEvent) return;
+        this.hideEventDetailModal();
+
+        this.editingEventId = this.currentEvent.id;
+        this.editingEvent = this.currentEvent;
+
+        document.getElementById('event-modal-title').textContent = '编辑日程';
+
+        const form = document.getElementById('event-form');
+        form.title.value = this.currentEvent.title;
+        form.description.value = this.currentEvent.description || '';
+        form.location.value = this.currentEvent.location || '';
+        form.meeting_link.value = this.currentEvent.meeting_link || '';
+        form.color.value = this.currentEvent.color || '#6366f1';
+        form.event_type.value = this.currentEvent.event_type || 'general';
+
+        const start = new Date(this.currentEvent.start_time);
+        const end = new Date(this.currentEvent.end_time);
+        form.start_time.value = start.toISOString().slice(0, 16);
+        form.end_time.value = end.toISOString().slice(0, 16);
+
+        this.updateEventTypeOptions();
+        document.getElementById('event-modal').style.display = 'flex';
+    }
+
+    async deleteCurrentEvent() {
+        if (!this.currentEvent) return;
+        if (!confirm('确定要删除这个日程吗？')) return;
+
+        try {
+            const eventId = this.currentEvent.id;
+            if (!eventId.toString().startsWith('meeting_') && !eventId.toString().startsWith('delivery_')) {
+                await api.delete(`/calendar/events/${eventId}`);
+                if (calendarInstance) {
+                    calendarInstance.removeEvent(eventId);
+                }
+            }
+            this.hideEventDetailModal();
+            this.loadCalendarStats();
+            showToast('日程已删除', 'success');
+        } catch (error) {
+            showToast(error.message, 'error');
+        }
+    }
+
+    async handleEventDrop(event, newDate) {
+        if (event.id.toString().startsWith('meeting_') || event.id.toString().startsWith('delivery_')) {
+            showToast('例会和交付任务不能直接拖拽调整', 'info');
+            return;
+        }
+
+        try {
+            const duration = new Date(event.end_time) - new Date(event.start_time);
+            const newEndTime = new Date(newDate.getTime() + duration);
+
+            await api.put(`/calendar/events/${event.id}`, {
+                start_time: newDate.toISOString(),
+                end_time: newEndTime.toISOString()
+            });
+
+            if (calendarInstance) {
+                calendarInstance.clearCache();
+                calendarInstance.loadEvents();
+            }
+            showToast('日程已更新', 'success');
+        } catch (error) {
+            showToast(error.message, 'error');
+            if (calendarInstance) {
+                calendarInstance.loadEvents();
+            }
+        }
+    }
+
+    async loadMeetingsList() {
+        const container = document.getElementById('meetings-list');
+        const projectFilter = document.getElementById('calendar-project-filter').value;
+
+        try {
+            let url = '/calendar/meetings';
+            if (projectFilter) url += `?project_id=${projectFilter}`;
+
+            const result = await api.get(url);
+            const meetings = result.meetings || [];
+
+            if (meetings.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📋</div>
+                        <h3>还没有例会</h3>
+                        <p>创建第一个项目例会吧！</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const recurrenceNames = {
+                daily: '每天',
+                weekly: '每周',
+                monthly: '每月',
+                once: '单次'
+            };
+
+            container.innerHTML = meetings.map(m => `
+                <div class="meeting-item">
+                    <div class="meeting-info">
+                        <h4>${escapeHtml(m.title)}</h4>
+                        <div class="meeting-meta">
+                            <span class="meeting-badge ${m.recurrence_type}">${recurrenceNames[m.recurrence_type]}</span>
+                            <span>📁 ${escapeHtml(m.project_name)}</span>
+                            <span>⏰ ${m.start_time?.substring(0, 5)} - ${m.end_time?.substring(0, 5)}</span>
+                        </div>
+                        ${m.description ? `<p class="meeting-desc">${escapeHtml(m.description)}</p>` : ''}
+                        ${m.location ? `<div class="meeting-location">📍 ${escapeHtml(m.location)}</div>` : ''}
+                    </div>
+                    <div class="meeting-actions">
+                        <button class="btn btn-outline btn-sm" onclick="app.editMeeting(${m.id})">编辑</button>
+                        <button class="btn btn-danger btn-sm" onclick="app.deleteMeeting(${m.id})">删除</button>
+                    </div>
+                </div>
+            `).join('');
+        } catch (error) {
+            container.innerHTML = `<div class="empty-state"><p>加载失败：${error.message}</p></div>`;
+        }
+    }
+
+    showCreateMeetingModal() {
+        this.showCreateEventModal();
+        document.getElementById('event-type-select').value = 'meeting';
+        document.getElementById('is-recurring-meeting').checked = true;
+        this.updateEventTypeOptions();
+        this.toggleRecurringOptions();
+    }
+
+    async editMeeting(meetingId) {
+        try {
+            const result = await api.get(`/calendar/meetings?project_id=`);
+            const meeting = result.meetings?.find(m => m.id === meetingId);
+            if (meeting) {
+                showToast('编辑例会功能开发中', 'info');
+            }
+        } catch (error) {
+            showToast(error.message, 'error');
+        }
+    }
+
+    async deleteMeeting(meetingId) {
+        if (!confirm('确定要删除这个例会吗？')) return;
+
+        try {
+            await api.delete(`/calendar/meetings/${meetingId}`);
+            this.loadMeetingsList();
+            if (calendarInstance) {
+                calendarInstance.clearCache();
+                calendarInstance.loadEvents();
+            }
+            this.loadCalendarStats();
+            showToast('例会已删除', 'success');
+        } catch (error) {
+            showToast(error.message, 'error');
+        }
+    }
+
+    async loadDeliveriesList() {
+        const container = document.getElementById('deliveries-list');
+        const projectFilter = document.getElementById('calendar-project-filter').value;
+        const resourceFilter = document.getElementById('calendar-resource-filter').value;
+
+        try {
+            let params = [];
+            if (projectFilter) params.push(`project_id=${projectFilter}`);
+            if (resourceFilter) params.push(`resource_type=${resourceFilter}`);
+            let url = '/calendar/deliveries' + (params.length ? '?' + params.join('&') : '');
+
+            const result = await api.get(url);
+            const deliveries = result.deliveries || [];
+
+            if (deliveries.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📦</div>
+                        <h3>还没有交付任务</h3>
+                        <p>添加第一个资源交付任务吧！</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const statusNames = {
+                pending: '待开始',
+                in_progress: '进行中',
+                completed: '已完成',
+                delayed: '已延期'
+            };
+
+            const resourceNames = {
+                art: '美术资源',
+                code: '程序代码',
+                document: '文档',
+                sound: '音效音乐',
+                general: '其他'
+            };
+
+            const priorityColors = {
+                low: 'var(--text-muted)',
+                medium: 'var(--primary-color)',
+                high: 'var(--warning-color)',
+                urgent: 'var(--danger-color)'
+            };
+
+            container.innerHTML = deliveries.map(d => {
+                const deadline = new Date(d.deadline);
+                const isOverdue = new Date() > deadline && d.status !== 'completed';
+                return `
+                    <div class="delivery-item ${isOverdue ? 'overdue' : ''} status-${d.status}">
+                        <div class="delivery-header">
+                            <h4>${escapeHtml(d.title)}</h4>
+                            <span class="delivery-status status-${d.status}">${statusNames[d.status]}</span>
+                        </div>
+                        <div class="delivery-meta">
+                            <span class="resource-type-badge type-${d.resource_type}">${resourceNames[d.resource_type] || d.resource_type}</span>
+                            <span>📁 ${escapeHtml(d.project_name)}</span>
+                            <span style="color: ${priorityColors[d.priority]};">⚡ ${d.priority === 'urgent' ? '紧急' : d.priority === 'high' ? '高' : d.priority === 'medium' ? '中' : '低'}</span>
+                        </div>
+                        <div class="delivery-deadline">
+                            📅 截止：${deadline.toLocaleString('zh-CN')}
+                            ${isOverdue ? '<span class="overdue-badge">已延期</span>' : ''}
+                        </div>
+                        ${d.assignee ? `<div class="delivery-assignee">👤 ${escapeHtml(d.assignee?.username || '')}</div>` : ''}
+                        ${d.description ? `<p class="delivery-desc">${escapeHtml(d.description)}</p>` : ''}
+                        <div class="delivery-actions">
+                            <button class="btn btn-outline btn-sm" onclick="app.editDelivery(${d.id})">编辑</button>
+                            <button class="btn btn-danger btn-sm" onclick="app.deleteDelivery(${d.id})">删除</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        } catch (error) {
+            container.innerHTML = `<div class="empty-state"><p>加载失败：${error.message}</p></div>`;
+        }
+    }
+
+    showCreateDeliveryModal() {
+        showToast('交付任务创建功能可通过"新建日程"选择"交付任务"类型使用', 'info');
+    }
+
+    async editDelivery(taskId) {
+        showToast('编辑交付任务功能开发中', 'info');
+    }
+
+    async deleteDelivery(taskId) {
+        if (!confirm('确定要删除这个交付任务吗？')) return;
+
+        try {
+            await api.delete(`/calendar/deliveries/${taskId}`);
+            this.loadDeliveriesList();
+            if (calendarInstance) {
+                calendarInstance.clearCache();
+                calendarInstance.loadEvents();
+            }
+            this.loadCalendarStats();
+            showToast('交付任务已删除', 'success');
+        } catch (error) {
+            showToast(error.message, 'error');
+        }
     }
 
     async renderChat(container, roomId) {
