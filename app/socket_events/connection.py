@@ -16,6 +16,8 @@ def handle_connect():
         for membership in memberships:
             join_room(f"room_{membership.room_id}")
         
+        join_room(f"user_{user.id}")
+        
         emit('user_connected', {
             'user_id': user.id,
             'username': user.username

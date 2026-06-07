@@ -534,3 +534,106 @@ class CalendarEvent(db.Model):
             'created_at': format_datetime_iso(self.created_at),
             'updated_at': format_datetime_iso(self.updated_at)
         }
+
+
+class CalendarEventMember(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    event_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    added_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    added_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    event = db.relationship('CalendarEvent', backref='event_members', foreign_keys=[event_id])
+    user = db.relationship('User', backref='calendar_event_memberships', foreign_keys=[user_id])
+    adder = db.relationship('User', backref='added_event_members', foreign_keys=[added_by])
+
+    __table_args__ = (
+        db.UniqueConstraint('event_id', 'user_id', name='_event_user_uc'),
+        db.Index('idx_event_member_event', 'event_id'),
+        db.Index('idx_event_member_user', 'user_id'),
+    )
+
+    def to_dict(self):
+        from app import format_datetime_iso
+        return {
+            'id': self.id,
+            'event_id': self.event_id,
+            'user_id': self.user_id,
+            'user': self.user.to_dict() if self.user else None,
+            'added_by': self.added_by,
+            'added_at': format_datetime_iso(self.added_at)
+        }
+
+
+class EventReminder(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    event_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    remind_before_minutes = db.Column(db.Integer, default=60)
+    channels = db.Column(db.String(200), default='in_app')
+    is_sent = db.Column(db.Boolean, default=False)
+    sent_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    event = db.relationship('CalendarEvent', backref='reminders', foreign_keys=[event_id])
+    user = db.relationship('User', backref='event_reminders', foreign_keys=[user_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('event_id', 'user_id', 'remind_before_minutes', name='_event_user_reminder_uc'),
+        db.Index('idx_reminder_event', 'event_id'),
+        db.Index('idx_reminder_user', 'user_id'),
+        db.Index('idx_reminder_sent', 'is_sent'),
+    )
+
+    def to_dict(self):
+        from app import format_datetime_iso
+        return {
+            'id': self.id,
+            'event_id': self.event_id,
+            'user_id': self.user_id,
+            'remind_before_minutes': self.remind_before_minutes,
+            'channels': self.channels.split(',') if self.channels else [],
+            'is_sent': self.is_sent,
+            'sent_at': format_datetime_iso(self.sent_at),
+            'created_at': format_datetime_iso(self.created_at),
+            'updated_at': format_datetime_iso(self.updated_at)
+        }
+
+
+class Notification(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    type = db.Column(db.String(50), default='reminder')
+    title = db.Column(db.String(200), nullable=False)
+    content = db.Column(db.Text, default='')
+    related_type = db.Column(db.String(50))
+    related_id = db.Column(db.Integer)
+    is_read = db.Column(db.Boolean, default=False)
+    read_at = db.Column(db.DateTime)
+    channel = db.Column(db.String(20), default='in_app')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    user = db.relationship('User', backref='notifications', foreign_keys=[user_id])
+
+    __table_args__ = (
+        db.Index('idx_notification_user', 'user_id'),
+        db.Index('idx_notification_read', 'is_read'),
+        db.Index('idx_notification_created', 'created_at'),
+    )
+
+    def to_dict(self):
+        from app import format_datetime_iso
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'type': self.type,
+            'title': self.title,
+            'content': self.content,
+            'related_type': self.related_type,
+            'related_id': self.related_id,
+            'is_read': self.is_read,
+            'read_at': format_datetime_iso(self.read_at),
+            'channel': self.channel,
+            'created_at': format_datetime_iso(self.created_at)
+        }

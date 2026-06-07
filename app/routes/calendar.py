@@ -5,8 +5,9 @@ import calendar
 import json
 import hashlib
 
-from app.models import db, User, Project, ProjectMember, ProjectMeeting, DeliveryTask, CalendarEvent
+from app.models import db, User, Project, ProjectMember, ProjectMeeting, DeliveryTask, CalendarEvent, CalendarEventMember, EventReminder
 from app import log_operation_from_request, get_local_tz, to_local_time
+from app.services.notification_service import get_user_notifications, mark_notification_read, mark_all_notifications_read, get_unread_count
 
 calendar_bp = Blueprint('calendar', __name__)
 
@@ -912,3 +913,432 @@ def get_calendar_summary():
             'today': today.isoformat()
         }
     }), 200
+
+
+@calendar_bp.route('/events/<int:event_id>/members', methods=['GET'])
+@jwt_required()
+def get_event_members(event_id):
+    current_user_id = int(get_jwt_identity())
+
+    event = CalendarEvent.query.get(event_id)
+    if not event:
+        return jsonify({'error': '事件不存在'}), 404
+
+    if event.project_id:
+        membership = ProjectMember.query.filter_by(
+            project_id=event.project_id,
+            user_id=current_user_id
+        ).first()
+        if not membership:
+            return jsonify({'error': '你不是该项目成员'}), 403
+    elif event.created_by != current_user_id:
+        return jsonify({'error': '没有权限查看此事件的成员'}), 403
+
+    members = CalendarEventMember.query.filter_by(event_id=event_id).all()
+
+    return jsonify({
+        'members': [m.to_dict() for m in members],
+        'total': len(members)
+    }), 200
+
+
+@calendar_bp.route('/events/<int:event_id>/members', methods=['POST'])
+@jwt_required()
+def add_event_member(event_id):
+    current_user_id = int(get_jwt_identity())
+    data = request.get_json()
+
+    event = CalendarEvent.query.get(event_id)
+    if not event:
+        return jsonify({'error': '事件不存在'}), 404
+
+    if event.project_id:
+        membership = ProjectMember.query.filter_by(
+            project_id=event.project_id,
+            user_id=current_user_id
+        ).first()
+        if not membership or membership.role not in ['owner', 'admin']:
+            if event.created_by != current_user_id:
+                return jsonify({'error': '没有权限添加成员'}), 403
+    elif event.created_by != current_user_id:
+        return jsonify({'error': '没有权限添加成员'}), 403
+
+    user_ids = data.get('user_ids', [])
+    if not user_ids:
+        return jsonify({'error': '缺少用户ID列表'}), 400
+
+    added_members = []
+    for user_id in user_ids:
+        if event.project_id:
+            user_membership = ProjectMember.query.filter_by(
+                project_id=event.project_id,
+                user_id=user_id
+            ).first()
+            if not user_membership:
+                continue
+
+        existing = CalendarEventMember.query.filter_by(
+            event_id=event_id,
+            user_id=user_id
+        ).first()
+        if existing:
+            added_members.append(existing.to_dict())
+            continue
+
+        member = CalendarEventMember(
+            event_id=event_id,
+            user_id=user_id,
+            added_by=current_user_id
+        )
+        db.session.add(member)
+        added_members.append(member)
+
+    db.session.commit()
+
+    result_members = []
+    for m in added_members:
+        if hasattr(m, 'to_dict'):
+            result_members.append(m.to_dict())
+        else:
+            member = CalendarEventMember.query.filter_by(
+                event_id=event_id,
+                user_id=m['user_id'] if isinstance(m, dict) else m.user_id
+            ).first()
+            if member:
+                result_members.append(member.to_dict())
+
+    _invalidate_user_cache(current_user_id)
+
+    log_operation_from_request(
+        operation_type='add_members',
+        target_type='calendar_event',
+        target_id=event_id,
+        user_id=current_user_id,
+        details={'user_ids': user_ids, 'count': len(result_members)}
+    )
+
+    return jsonify({
+        'members': result_members,
+        'added_count': len(result_members)
+    }), 200
+
+
+@calendar_bp.route('/events/<int:event_id>/members/<int:user_id>', methods=['DELETE'])
+@jwt_required()
+def remove_event_member(event_id, user_id):
+    current_user_id = int(get_jwt_identity())
+
+    event = CalendarEvent.query.get(event_id)
+    if not event:
+        return jsonify({'error': '事件不存在'}), 404
+
+    if event.project_id:
+        membership = ProjectMember.query.filter_by(
+            project_id=event.project_id,
+            user_id=current_user_id
+        ).first()
+        if not membership or membership.role not in ['owner', 'admin']:
+            if event.created_by != current_user_id:
+                return jsonify({'error': '没有权限移除成员'}), 403
+    elif event.created_by != current_user_id:
+        return jsonify({'error': '没有权限移除成员'}), 403
+
+    member = CalendarEventMember.query.filter_by(
+        event_id=event_id,
+        user_id=user_id
+    ).first()
+    if not member:
+        return jsonify({'error': '成员不存在'}), 404
+
+    db.session.delete(member)
+    db.session.commit()
+
+    _invalidate_user_cache(current_user_id)
+
+    log_operation_from_request(
+        operation_type='remove_member',
+        target_type='calendar_event',
+        target_id=event_id,
+        user_id=current_user_id,
+        details={'removed_user_id': user_id}
+    )
+
+    return jsonify({'message': '成员已移除'}), 200
+
+
+@calendar_bp.route('/events/<int:event_id>/reminders', methods=['GET'])
+@jwt_required()
+def get_event_reminders(event_id):
+    current_user_id = int(get_jwt_identity())
+
+    event = CalendarEvent.query.get(event_id)
+    if not event:
+        return jsonify({'error': '事件不存在'}), 404
+
+    is_member = False
+    if event.project_id:
+        membership = ProjectMember.query.filter_by(
+            project_id=event.project_id,
+            user_id=current_user_id
+        ).first()
+        is_member = membership is not None
+    elif event.created_by == current_user_id:
+        is_member = True
+
+    event_member = CalendarEventMember.query.filter_by(
+        event_id=event_id,
+        user_id=current_user_id
+    ).first()
+    if event_member:
+        is_member = True
+
+    if not is_member:
+        return jsonify({'error': '没有权限查看此事件的提醒'}), 403
+
+    reminders = EventReminder.query.filter_by(
+        event_id=event_id,
+        user_id=current_user_id
+    ).all()
+
+    return jsonify({
+        'reminders': [r.to_dict() for r in reminders],
+        'total': len(reminders)
+    }), 200
+
+
+@calendar_bp.route('/events/<int:event_id>/reminders', methods=['POST'])
+@jwt_required()
+def create_event_reminder(event_id):
+    current_user_id = int(get_jwt_identity())
+    data = request.get_json()
+
+    event = CalendarEvent.query.get(event_id)
+    if not event:
+        return jsonify({'error': '事件不存在'}), 404
+
+    is_member = False
+    if event.project_id:
+        membership = ProjectMember.query.filter_by(
+            project_id=event.project_id,
+            user_id=current_user_id
+        ).first()
+        is_member = membership is not None
+    elif event.created_by == current_user_id:
+        is_member = True
+
+    event_member = CalendarEventMember.query.filter_by(
+        event_id=event_id,
+        user_id=current_user_id
+    ).first()
+    if event_member:
+        is_member = True
+
+    if not is_member:
+        return jsonify({'error': '没有权限设置提醒'}), 403
+
+    remind_before_minutes = data.get('remind_before_minutes', 60)
+    channels = data.get('channels', ['in_app'])
+
+    if not isinstance(remind_before_minutes, int) or remind_before_minutes < 0:
+        return jsonify({'error': '提醒时间无效'}), 400
+
+    valid_channels = ['in_app', 'email', 'sms']
+    channels = [c for c in channels if c in valid_channels]
+    if not channels:
+        channels = ['in_app']
+
+    existing = EventReminder.query.filter_by(
+        event_id=event_id,
+        user_id=current_user_id,
+        remind_before_minutes=remind_before_minutes
+    ).first()
+    if existing:
+        existing.channels = ','.join(channels)
+        existing.is_sent = False
+        existing.sent_at = None
+        db.session.commit()
+        return jsonify({'reminder': existing.to_dict()}), 200
+
+    reminder = EventReminder(
+        event_id=event_id,
+        user_id=current_user_id,
+        remind_before_minutes=remind_before_minutes,
+        channels=','.join(channels),
+        is_sent=False
+    )
+    db.session.add(reminder)
+    db.session.commit()
+
+    _invalidate_user_cache(current_user_id)
+
+    log_operation_from_request(
+        operation_type='create_reminder',
+        target_type='calendar_event',
+        target_id=event_id,
+        user_id=current_user_id,
+        details={'remind_before_minutes': remind_before_minutes, 'channels': channels}
+    )
+
+    return jsonify({'reminder': reminder.to_dict()}), 201
+
+
+@calendar_bp.route('/reminders/<int:reminder_id>', methods=['PUT'])
+@jwt_required()
+def update_event_reminder(reminder_id):
+    current_user_id = int(get_jwt_identity())
+    data = request.get_json()
+
+    reminder = EventReminder.query.get(reminder_id)
+    if not reminder:
+        return jsonify({'error': '提醒不存在'}), 404
+
+    if reminder.user_id != current_user_id:
+        return jsonify({'error': '没有权限修改此提醒'}), 403
+
+    if 'remind_before_minutes' in data:
+        remind_before_minutes = data['remind_before_minutes']
+        if not isinstance(remind_before_minutes, int) or remind_before_minutes < 0:
+            return jsonify({'error': '提醒时间无效'}), 400
+        reminder.remind_before_minutes = remind_before_minutes
+        reminder.is_sent = False
+        reminder.sent_at = None
+
+    if 'channels' in data:
+        valid_channels = ['in_app', 'email', 'sms']
+        channels = [c for c in data['channels'] if c in valid_channels]
+        if channels:
+            reminder.channels = ','.join(channels)
+
+    if 'is_sent' in data:
+        reminder.is_sent = data['is_sent']
+        if data['is_sent']:
+            reminder.sent_at = datetime.utcnow()
+        else:
+            reminder.sent_at = None
+
+    db.session.commit()
+
+    _invalidate_user_cache(current_user_id)
+
+    log_operation_from_request(
+        operation_type='update_reminder',
+        target_type='event_reminder',
+        target_id=reminder_id,
+        user_id=current_user_id,
+        details=data
+    )
+
+    return jsonify({'reminder': reminder.to_dict()}), 200
+
+
+@calendar_bp.route('/reminders/<int:reminder_id>', methods=['DELETE'])
+@jwt_required()
+def delete_event_reminder(reminder_id):
+    current_user_id = int(get_jwt_identity())
+
+    reminder = EventReminder.query.get(reminder_id)
+    if not reminder:
+        return jsonify({'error': '提醒不存在'}), 404
+
+    if reminder.user_id != current_user_id:
+        return jsonify({'error': '没有权限删除此提醒'}), 403
+
+    db.session.delete(reminder)
+    db.session.commit()
+
+    _invalidate_user_cache(current_user_id)
+
+    log_operation_from_request(
+        operation_type='delete_reminder',
+        target_type='event_reminder',
+        target_id=reminder_id,
+        user_id=current_user_id,
+        details={'event_id': reminder.event_id}
+    )
+
+    return jsonify({'message': '提醒已删除'}), 200
+
+
+@calendar_bp.route('/reminders/my', methods=['GET'])
+@jwt_required()
+def get_my_reminders():
+    current_user_id = int(get_jwt_identity())
+
+    upcoming_only = request.args.get('upcoming_only', 'false').lower() == 'true'
+
+    query = EventReminder.query.filter_by(user_id=current_user_id)
+
+    if upcoming_only:
+        query = query.filter_by(is_sent=False).join(CalendarEvent).filter(
+            CalendarEvent.start_time > datetime.utcnow()
+        )
+
+    reminders = query.order_by(EventReminder.created_at.desc()).all()
+
+    result = []
+    for r in reminders:
+        reminder_dict = r.to_dict()
+        if r.event:
+            reminder_dict['event'] = {
+                'id': r.event.id,
+                'title': r.event.title,
+                'start_time': to_local_time(r.event.start_time).isoformat() if r.event.start_time else None,
+                'end_time': to_local_time(r.event.end_time).isoformat() if r.event.end_time else None,
+                'location': r.event.location,
+                'project_id': r.event.project_id
+            }
+        result.append(reminder_dict)
+
+    return jsonify({
+        'reminders': result,
+        'total': len(result)
+    }), 200
+
+
+@calendar_bp.route('/notifications', methods=['GET'])
+@jwt_required()
+def get_notifications():
+    current_user_id = int(get_jwt_identity())
+
+    limit = request.args.get('limit', 50, type=int)
+    unread_only = request.args.get('unread_only', 'false').lower() == 'true'
+
+    notifications = get_user_notifications(current_user_id, limit=limit, unread_only=unread_only)
+
+    return jsonify({
+        'notifications': notifications,
+        'total': len(notifications),
+        'unread_count': get_unread_count(current_user_id)
+    }), 200
+
+
+@calendar_bp.route('/notifications/unread_count', methods=['GET'])
+@jwt_required()
+def get_notification_unread_count():
+    current_user_id = int(get_jwt_identity())
+
+    count = get_unread_count(current_user_id)
+
+    return jsonify({'unread_count': count}), 200
+
+
+@calendar_bp.route('/notifications/<int:notification_id>/read', methods=['POST'])
+@jwt_required()
+def mark_notification_as_read(notification_id):
+    current_user_id = int(get_jwt_identity())
+
+    result = mark_notification_read(notification_id, current_user_id)
+    if not result:
+        return jsonify({'error': '通知不存在或无权限'}), 404
+
+    return jsonify({'notification': result}), 200
+
+
+@calendar_bp.route('/notifications/read_all', methods=['POST'])
+@jwt_required()
+def mark_all_notifications_as_read():
+    current_user_id = int(get_jwt_identity())
+
+    count = mark_all_notifications_read(current_user_id)
+
+    return jsonify({'message': f'已标记 {count} 条通知为已读', 'count': count}), 200

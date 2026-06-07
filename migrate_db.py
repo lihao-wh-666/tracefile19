@@ -72,12 +72,27 @@ def migrate_database():
         else:
             print("\n3. ChatRoom 表不存在，将在后续步骤中创建")
         
+        calendar_event_table_exists = table_exists(engine, 'calendar_event')
+        if calendar_event_table_exists:
+            print("\n4. 检查日历事件相关的新表...")
+            
+            from app import create_app
+            from app.models import db as main_db
+            
+            app = create_app()
+            with app.app_context():
+                print("   确保所有表已创建...")
+                main_db.create_all()
+                print("   ✓ 所有表已创建")
+        else:
+            print("\n4. CalendarEvent 表不存在，将在后续步骤中创建")
+        
         from app import create_app
         from app.models import db as main_db
         
         app = create_app()
         with app.app_context():
-            print("\n3. 确保所有表已创建...")
+            print("\n5. 确保所有表已创建...")
             main_db.create_all()
             print("   ✓ 所有表已创建")
         

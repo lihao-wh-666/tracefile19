@@ -8,6 +8,7 @@ import json
 
 from config import Config
 from app.models import db, bcrypt, jwt, User, IdeaCard, OperationLog
+from app.services.reminder_scheduler import reminder_scheduler
 
 socketio = SocketIO(cors_allowed_origins="*", async_mode='threading', logger=False, engineio_logger=False, ping_timeout=60, ping_interval=25)
 
@@ -116,6 +117,9 @@ def create_app(config_class=Config):
         db.create_all()
         create_admin_user()
         create_default_chat_room()
+    
+    reminder_scheduler.init_app(app)
+    reminder_scheduler.start()
     
     return app
 
