@@ -1,12 +1,19 @@
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app, redirect, session, url_for
 from flask_jwt_extended import (
     create_access_token,
     jwt_required,
     get_jwt_identity,
     get_jwt
 )
-from app.models import db, User, UserNotificationSettings, ChatRoom, ChatRoomMember
+from app.models import db, User, UserNotificationSettings, ChatRoom, ChatRoomMember, OAuthAccount
 from app.rsa_utils import get_public_key_pem, decrypt_rsa
+from app.services.oauth_service import (
+    GitHubOAuth,
+    QQOAuth,
+    EmailService,
+    OAuthAccountManager,
+    generate_state,
+)
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -197,3 +204,336 @@ def check_email():
     
     existing = User.query.filter_by(email=email).first()
     return jsonify({'available': existing is None}), 200
+
+
+@auth_bp.route('/oauth/providers', methods=['GET'])
+def get_oauth_providers():
+    providers = []
+    
+    github_client_id = current_app.config.get('GITHUB_CLIENT_ID')
+    if github_client_id:
+        providers.append({
+            'provider': 'github',
+            'name': 'GitHub',
+            'icon': '🐙',
+            'enabled': True
+        })
+    
+    qq_app_id = current_app.config.get('QQ_APP_ID')
+    if qq_app_id:
+        providers.append({
+            'provider': 'qq',
+            'name': 'QQ',
+            'icon': '🐧',
+            'enabled': True
+        })
+    
+    providers.append({
+        'provider': 'email',
+        'name': '邮箱验证码',
+        'icon': '📧',
+        'enabled': True
+    })
+    
+    return jsonify({'providers': providers}), 200
+
+
+@auth_bp.route('/oauth/github', methods=['GET'])
+def oauth_github_login():
+    client_id = current_app.config.get('GITHUB_CLIENT_ID')
+    if not client_id:
+        return jsonify({'error': 'GitHub登录未配置'}), 400
+    
+    state = generate_state()
+    session['oauth_state'] = state
+    session['oauth_provider'] = 'github'
+    
+    auth_url = GitHubOAuth.get_authorization_url(state)
+    return jsonify({'auth_url': auth_url, 'state': state}), 200
+
+
+@auth_bp.route('/oauth/github/callback', methods=['GET'])
+def oauth_github_callback():
+    code = request.args.get('code')
+    state = request.args.get('state')
+    error = request.args.get('error')
+    
+    if error:
+        return _oauth_error_redirect('GitHub授权失败')
+    
+    if not code:
+        return _oauth_error_redirect('缺少授权码')
+    
+    stored_state = session.pop('oauth_state', None)
+    if not state or state != stored_state:
+        return _oauth_error_redirect('状态验证失败')
+    
+    access_token = GitHubOAuth.get_access_token(code)
+    if not access_token:
+        return _oauth_error_redirect('获取访问令牌失败')
+    
+    user_info = GitHubOAuth.get_user_info(access_token)
+    if not user_info:
+        return _oauth_error_redirect('获取用户信息失败')
+    
+    user, error_msg = OAuthAccountManager.get_or_create_user(
+        provider='github',
+        provider_user_id=user_info['id'],
+        user_info=user_info,
+        email=user_info.get('email')
+    )
+    
+    if error_msg:
+        return _oauth_error_redirect(error_msg)
+    
+    access_token_jwt = create_access_token(identity=str(user.id))
+    
+    return _oauth_success_redirect(access_token_jwt, user)
+
+
+@auth_bp.route('/oauth/qq', methods=['GET'])
+def oauth_qq_login():
+    app_id = current_app.config.get('QQ_APP_ID')
+    if not app_id:
+        return jsonify({'error': 'QQ登录未配置'}), 400
+    
+    state = generate_state()
+    session['oauth_state'] = state
+    session['oauth_provider'] = 'qq'
+    
+    auth_url = QQOAuth.get_authorization_url(state)
+    return jsonify({'auth_url': auth_url, 'state': state}), 200
+
+
+@auth_bp.route('/oauth/qq/callback', methods=['GET'])
+def oauth_qq_callback():
+    code = request.args.get('code')
+    state = request.args.get('state')
+    error = request.args.get('error')
+    
+    if error:
+        return _oauth_error_redirect('QQ授权失败')
+    
+    if not code:
+        return _oauth_error_redirect('缺少授权码')
+    
+    stored_state = session.pop('oauth_state', None)
+    if not state or state != stored_state:
+        return _oauth_error_redirect('状态验证失败')
+    
+    access_token = QQOAuth.get_access_token(code)
+    if not access_token:
+        return _oauth_error_redirect('获取访问令牌失败')
+    
+    open_id = QQOAuth.get_open_id(access_token)
+    if not open_id:
+        return _oauth_error_redirect('获取用户ID失败')
+    
+    user_info = QQOAuth.get_user_info(access_token, open_id)
+    if not user_info:
+        return _oauth_error_redirect('获取用户信息失败')
+    
+    user, error_msg = OAuthAccountManager.get_or_create_user(
+        provider='qq',
+        provider_user_id=open_id,
+        user_info=user_info
+    )
+    
+    if error_msg:
+        return _oauth_error_redirect(error_msg)
+    
+    access_token_jwt = create_access_token(identity=str(user.id))
+    
+    return _oauth_success_redirect(access_token_jwt, user)
+
+
+def _oauth_success_redirect(token, user):
+    from urllib.parse import urlencode
+    params = {
+        'token': token,
+        'user_id': user.id,
+        'username': user.username,
+        'avatar': user.avatar or '',
+        'success': 'true'
+    }
+    redirect_url = f"/#/oauth-callback?{urlencode(params)}"
+    return redirect(redirect_url)
+
+
+def _oauth_error_redirect(error_msg):
+    from urllib.parse import urlencode
+    params = {
+        'error': error_msg,
+        'success': 'false'
+    }
+    redirect_url = f"/#/oauth-callback?{urlencode(params)}"
+    return redirect(redirect_url)
+
+
+@auth_bp.route('/email/send-code', methods=['POST'])
+def send_email_code():
+    data = request.get_json()
+    email = data.get('email')
+    purpose = data.get('purpose', 'login')
+    
+    if not email:
+        return jsonify({'error': '邮箱不能为空'}), 400
+    
+    if purpose not in ['login', 'register', 'bind']:
+        return jsonify({'error': '无效的用途'}), 400
+    
+    code = EmailService.create_verification_code(email, purpose)
+    
+    sent = EmailService.send_verification_email(email, code, purpose)
+    
+    if sent:
+        return jsonify({'message': '验证码已发送，请查收邮箱'}), 200
+    else:
+        if current_app.debug or current_app.config.get('DEBUG', False):
+            return jsonify({'message': '测试模式', 'code': code}), 200
+        return jsonify({'error': '验证码发送失败，请稍后重试'}), 500
+
+
+@auth_bp.route('/email/login', methods=['POST'])
+def email_login():
+    data = request.get_json()
+    email = data.get('email')
+    code = data.get('code')
+    
+    if not email or not code:
+        return jsonify({'error': '邮箱和验证码不能为空'}), 400
+    
+    if not EmailService.verify_code(email, code, 'login'):
+        return jsonify({'error': '验证码错误或已过期'}), 400
+    
+    user = User.query.filter_by(email=email).first()
+    
+    if not user:
+        from app.services.oauth_service import generate_random_username
+        username = email.split('@')[0]
+        original_username = username
+        counter = 1
+        while User.query.filter_by(username=username).first():
+            username = f"{original_username}_{counter}"
+            counter += 1
+        
+        user = User(
+            username=username,
+            email=email,
+            role='user',
+            is_active=True
+        )
+        user.set_password(generate_random_username())
+        db.session.add(user)
+        db.session.flush()
+        
+        notify_settings = UserNotificationSettings(user_id=user.id)
+        db.session.add(notify_settings)
+        
+        default_room = ChatRoom.query.filter_by(name='开发者广场', type='group').first()
+        if default_room:
+            member = ChatRoomMember(room_id=default_room.id, user_id=user.id)
+            db.session.add(member)
+        
+        db.session.commit()
+    
+    if not user.is_active:
+        return jsonify({'error': '账号已被禁用'}), 401
+    
+    access_token = create_access_token(identity=str(user.id))
+    
+    return jsonify({
+        'message': '登录成功',
+        'access_token': access_token,
+        'user': user.to_dict(include_email=True)
+    }), 200
+
+
+@auth_bp.route('/oauth/accounts', methods=['GET'])
+@jwt_required()
+def get_oauth_accounts():
+    current_user_id = int(get_jwt_identity())
+    accounts = OAuthAccountManager.get_user_oauth_accounts(current_user_id)
+    
+    return jsonify({
+        'accounts': accounts,
+        'has_password': bool(User.query.get(current_user_id).password_hash)
+    }), 200
+
+
+@auth_bp.route('/oauth/unlink/<provider>', methods=['POST'])
+@jwt_required()
+def unlink_oauth_account(provider):
+    current_user_id = int(get_jwt_identity())
+    
+    if provider not in ['github', 'qq']:
+        return jsonify({'error': '不支持的第三方账号'}), 400
+    
+    success, error_msg = OAuthAccountManager.unlink_account(current_user_id, provider)
+    
+    if not success:
+        return jsonify({'error': error_msg}), 400
+    
+    return jsonify({'message': '解绑成功'}), 200
+
+
+@auth_bp.route('/oauth/link/github', methods=['POST'])
+@jwt_required()
+def link_github():
+    current_user_id = int(get_jwt_identity())
+    data = request.get_json()
+    code = data.get('code')
+    
+    if not code:
+        return jsonify({'error': '缺少授权码'}), 400
+    
+    access_token = GitHubOAuth.get_access_token(code)
+    if not access_token:
+        return jsonify({'error': '获取访问令牌失败'}), 400
+    
+    user_info = GitHubOAuth.get_user_info(access_token)
+    if not user_info:
+        return jsonify({'error': '获取用户信息失败'}), 400
+    
+    success, error_msg = OAuthAccountManager.link_account(
+        user_id=current_user_id,
+        provider='github',
+        provider_user_id=user_info['id'],
+        access_token=access_token
+    )
+    
+    if not success:
+        return jsonify({'error': error_msg}), 400
+    
+    return jsonify({'message': '绑定成功', 'provider': 'github'}), 200
+
+
+@auth_bp.route('/oauth/link/qq', methods=['POST'])
+@jwt_required()
+def link_qq():
+    current_user_id = int(get_jwt_identity())
+    data = request.get_json()
+    code = data.get('code')
+    
+    if not code:
+        return jsonify({'error': '缺少授权码'}), 400
+    
+    access_token = QQOAuth.get_access_token(code)
+    if not access_token:
+        return jsonify({'error': '获取访问令牌失败'}), 400
+    
+    open_id = QQOAuth.get_open_id(access_token)
+    if not open_id:
+        return jsonify({'error': '获取用户ID失败'}), 400
+    
+    success, error_msg = OAuthAccountManager.link_account(
+        user_id=current_user_id,
+        provider='qq',
+        provider_user_id=open_id,
+        access_token=access_token
+    )
+    
+    if not success:
+        return jsonify({'error': error_msg}), 400
+    
+    return jsonify({'message': '绑定成功', 'provider': 'qq'}), 200

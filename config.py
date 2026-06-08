@@ -22,3 +22,20 @@ class Config:
     LOGIN_LOCK_WINDOW_MINUTES = int(os.environ.get('LOGIN_LOCK_WINDOW_MINUTES', 30))
     
     TIMEZONE = os.environ.get('TZ', 'Asia/Shanghai')
+
+    GITHUB_CLIENT_ID = os.environ.get('GITHUB_CLIENT_ID', '')
+    GITHUB_CLIENT_SECRET = os.environ.get('GITHUB_CLIENT_SECRET', '')
+    GITHUB_REDIRECT_URI = os.environ.get('GITHUB_REDIRECT_URI', 'http://localhost:5000/api/auth/oauth/github/callback')
+
+    QQ_APP_ID = os.environ.get('QQ_APP_ID', '')
+    QQ_APP_KEY = os.environ.get('QQ_APP_KEY', '')
+    QQ_REDIRECT_URI = os.environ.get('QQ_REDIRECT_URI', 'http://localhost:5000/api/auth/oauth/qq/callback')
+
+    EMAIL_VERIFICATION_CODE_EXPIRES = int(os.environ.get('EMAIL_VERIFICATION_CODE_EXPIRES', 300))
+    EMAIL_SMTP_HOST = os.environ.get('EMAIL_SMTP_HOST', '')
+    EMAIL_SMTP_PORT = int(os.environ.get('EMAIL_SMTP_PORT', 587))
+    EMAIL_SMTP_USER = os.environ.get('EMAIL_SMTP_USER', '')
+    EMAIL_SMTP_PASSWORD = os.environ.get('EMAIL_SMTP_PASSWORD', '')
+    EMAIL_SENDER = os.environ.get('EMAIL_SENDER', '')
+
+    OAUTH_STATE_TIMEOUT = int(os.environ.get('OAUTH_STATE_TIMEOUT', 600))

@@ -748,3 +748,53 @@ class Notification(db.Model):
             'channel': self.channel,
             'created_at': format_datetime_iso(self.created_at)
         }
+
+
+class OAuthAccount(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    provider = db.Column(db.String(20), nullable=False)
+    provider_user_id = db.Column(db.String(100), nullable=False)
+    access_token = db.Column(db.String(500))
+    refresh_token = db.Column(db.String(500))
+    expires_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = db.relationship('User', backref='oauth_accounts')
+
+    __table_args__ = (
+        db.UniqueConstraint('provider', 'provider_user_id', name='_provider_user_uc'),
+        db.Index('idx_oauth_user', 'user_id'),
+    )
+
+    def to_dict(self):
+        from app import format_datetime_iso
+        return {
+            'id': self.id,
+            'provider': self.provider,
+            'provider_user_id': self.provider_user_id,
+            'created_at': format_datetime_iso(self.created_at),
+        }
+
+
+class EmailVerificationCode(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(120), nullable=False)
+    code = db.Column(db.String(10), nullable=False)
+    purpose = db.Column(db.String(20), default='login')
+    expires_at = db.Column(db.DateTime, nullable=False)
+    used = db.Column(db.Boolean, default=False)
+    used_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.Index('idx_email_code', 'email', 'code'),
+        db.Index('idx_email_purpose', 'email', 'purpose'),
+    )
+
+    def is_expired(self):
+        return datetime.utcnow() > self.expires_at
+
+    def is_valid(self):
+        return not self.used and not self.is_expired()

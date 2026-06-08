@@ -141,6 +141,21 @@ class App {
 
     handleRoute() {
         let path = window.location.pathname;
+        let queryParams = {};
+        
+        const hash = window.location.hash;
+        if (hash && hash.startsWith('#/')) {
+            const hashPath = hash.slice(2);
+            const [pathPart, queryPart] = hashPath.split('?');
+            path = '/' + pathPart;
+            
+            if (queryPart) {
+                queryParams = Object.fromEntries(
+                    queryPart.split('&').map(pair => pair.split('='))
+                );
+            }
+        }
+        
         if (path === '/' || path === '') {
             path = '/home';
         }
@@ -149,7 +164,7 @@ class App {
         }
         const [page, ...params] = path.split('/');
         this.currentPage = page || 'home';
-        this.currentParams = { id: params[0] };
+        this.currentParams = { id: params[0], ...queryParams };
         this.render();
     }
 
@@ -212,8 +227,92 @@ class App {
             case 'admin':
                 this.renderAdmin(main);
                 break;
+            case 'oauth-callback':
+                this.renderOAuthCallback(main);
+                break;
             default:
                 this.renderHome(main);
+        }
+    }
+
+    renderOAuthCallback(container) {
+        const params = this.currentParams;
+        const success = params.success === 'true';
+        const error = params.error ? decodeURIComponent(params.error) : null;
+        const token = params.token || null;
+        const code = params.code || null;
+
+        container.innerHTML = `
+            <div class="auth-container" style="text-align: center;">
+                <div class="auth-header">
+                    ${success ? '<div style="font-size: 4rem; margin-bottom: 1rem;">✅</div>' : '<div style="font-size: 4rem; margin-bottom: 1rem;">❌</div>'}
+                    <h1>${success ? '授权成功' : '授权失败'}</h1>
+                    <p>${success ? '正在处理登录信息...' : (error || '授权过程中出现错误')}</p>
+                </div>
+                <div class="loading" style="margin: 2rem 0;">
+                    ${success ? '<div class="spinner"></div>' : ''}
+                </div>
+                <p style="color: var(--text-muted); font-size: 0.875rem;">
+                    窗口将自动关闭...
+                </p>
+            </div>
+        `;
+
+        if (success && window.opener && !window.opener.closed) {
+            if (window.opener._handleOAuthCallback) {
+                window.opener._handleOAuthCallback({
+                    success: true,
+                    token: token,
+                    user_id: params.user_id,
+                    username: decodeURIComponent(params.username || ''),
+                    avatar: decodeURIComponent(params.avatar || ''),
+                });
+                setTimeout(() => window.close(), 500);
+                return;
+            }
+            
+            if (window.opener._handleLinkCallback) {
+                window.opener._handleLinkCallback({
+                    success: true,
+                    code: code,
+                });
+                setTimeout(() => window.close(), 500);
+                return;
+            }
+        }
+
+        if (success && token) {
+            api.setToken(token);
+            auth.currentUser = {
+                id: params.user_id,
+                username: decodeURIComponent(params.username || ''),
+                avatar: decodeURIComponent(params.avatar || ''),
+            };
+            setTimeout(() => {
+                navigate('home');
+            }, 1000);
+        }
+
+        if (!success) {
+            setTimeout(() => {
+                if (window.opener && !window.opener.closed) {
+                    if (window.opener._handleOAuthCallback) {
+                        window.opener._handleOAuthCallback({
+                            success: false,
+                            error: error
+                        });
+                    }
+                    if (window.opener._handleLinkCallback) {
+                        window.opener._handleLinkCallback({
+                            success: false,
+                            error: error
+                        });
+                    }
+                    window.close();
+                } else {
+                    navigate('login');
+                }
+            }, 2000);
         }
     }
 
@@ -292,22 +391,63 @@ class App {
                     <h1>欢迎回来</h1>
                     <p>登录你的账号继续探索</p>
                 </div>
-                <form id="login-form">
-                    <div class="form-group">
-                        <label>邮箱</label>
-                        <input type="email" name="email" required placeholder="your@email.com">
-                    </div>
-                    <div class="form-group">
-                        <label>密码</label>
-                        <input type="password" name="password" required placeholder="••••••••">
-                    </div>
-                    <button type="submit" class="btn btn-primary btn-block">登录</button>
-                </form>
+                
+                <div class="auth-tabs">
+                    <button class="auth-tab active" data-tab="password">密码登录</button>
+                    <button class="auth-tab" data-tab="email">邮箱验证码</button>
+                </div>
+                
+                <div class="auth-tab-content">
+                    <form id="login-form" class="auth-tab-pane active" data-pane="password">
+                        <div class="form-group">
+                            <label>邮箱</label>
+                            <input type="email" name="email" required placeholder="your@email.com">
+                        </div>
+                        <div class="form-group">
+                            <label>密码</label>
+                            <input type="password" name="password" required placeholder="••••••••">
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-block">登录</button>
+                    </form>
+                    
+                    <form id="email-login-form" class="auth-tab-pane" data-pane="email" style="display: none;">
+                        <div class="form-group">
+                            <label>邮箱</label>
+                            <input type="email" name="email" required placeholder="your@email.com" id="email-login-email">
+                        </div>
+                        <div class="form-group">
+                            <label>验证码</label>
+                            <div class="code-input-group">
+                                <input type="text" name="code" required placeholder="请输入验证码" maxlength="6" id="email-login-code">
+                                <button type="button" class="btn btn-outline btn-code" id="send-code-btn">发送验证码</button>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-block">登录 / 注册</button>
+                    </form>
+                </div>
+                
+                <div class="auth-divider">
+                    <span>或使用以下方式登录</span>
+                </div>
+                
+                <div class="social-login" id="social-login-buttons">
+                    <div class="loading"><div class="spinner"></div></div>
+                </div>
+                
                 <div class="form-footer">
                     还没有账号？<a href="javascript:void(0)" onclick="navigate('register')">立即注册</a>
                 </div>
             </div>
         `;
+
+        document.querySelectorAll('.auth-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                document.querySelectorAll('.auth-tab-pane').forEach(p => p.style.display = 'none');
+                document.querySelector(`[data-pane="${tab.dataset.tab}"]`).style.display = 'block';
+            });
+        });
 
         document.getElementById('login-form').addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -325,6 +465,90 @@ class App {
                 showToast(error.message, 'error');
             }
         });
+
+        let codeCountdown = 0;
+        const sendCodeBtn = document.getElementById('send-code-btn');
+        sendCodeBtn.addEventListener('click', async () => {
+            const email = document.getElementById('email-login-email').value;
+            if (!email) {
+                showToast('请先输入邮箱', 'error');
+                return;
+            }
+            if (codeCountdown > 0) return;
+            
+            try {
+                await auth.sendEmailCode(email, 'login');
+                showToast('验证码已发送，请查收邮箱', 'success');
+                codeCountdown = 60;
+                const updateBtn = () => {
+                    if (codeCountdown > 0) {
+                        sendCodeBtn.textContent = `${codeCountdown}秒后重发`;
+                        sendCodeBtn.disabled = true;
+                        codeCountdown--;
+                        setTimeout(updateBtn, 1000);
+                    } else {
+                        sendCodeBtn.textContent = '发送验证码';
+                        sendCodeBtn.disabled = false;
+                    }
+                };
+                updateBtn();
+            } catch (error) {
+                showToast(error.message, 'error');
+            }
+        });
+
+        document.getElementById('email-login-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('email-login-email').value;
+            const code = document.getElementById('email-login-code').value;
+            
+            try {
+                const result = await auth.loginWithEmail(email, code);
+                showToast(result.user ? '登录成功！' : '注册成功！', 'success');
+                this.updateNav();
+                this.initChat();
+                navigate('home');
+            } catch (error) {
+                showToast(error.message, 'error');
+            }
+        });
+
+        this._loadSocialLoginButtons();
+    }
+
+    async _loadSocialLoginButtons() {
+        try {
+            const providers = await auth.getOAuthProviders();
+            const container = document.getElementById('social-login-buttons');
+            if (!container) return;
+            
+            if (providers.length === 0) {
+                container.innerHTML = '<p style="color: var(--text-muted); text-align: center;">暂无第三方登录方式</p>';
+                return;
+            }
+            
+            container.innerHTML = providers.map(p => `
+                <button class="btn btn-social btn-${p.provider}" onclick="app.socialLogin('${p.provider}')">
+                    <span class="social-icon">${p.icon}</span>
+                    <span>${p.name}登录</span>
+                </button>
+            `).join('');
+        } catch (error) {
+            console.error('加载第三方登录方式失败:', error);
+        }
+    }
+
+    async socialLogin(provider) {
+        try {
+            showToast(`正在跳转到${provider === 'github' ? 'GitHub' : provider === 'qq' ? 'QQ' : '邮箱'}授权页面...`, 'info');
+            await auth.loginWithOAuth(provider);
+            showToast('登录成功！', 'success');
+            this.updateNav();
+            this.initChat();
+            navigate('home');
+        } catch (error) {
+            showToast(error.message, 'error');
+        }
     }
 
     renderRegister(container) {
@@ -339,6 +563,7 @@ class App {
                     <h1>加入 GameDev Hub</h1>
                     <p>创建你的账号，开始分享灵感</p>
                 </div>
+                
                 <form id="register-form">
                     <div class="form-group">
                         <label>用户名</label>
@@ -354,6 +579,15 @@ class App {
                     </div>
                     <button type="submit" class="btn btn-primary btn-block">注册</button>
                 </form>
+                
+                <div class="auth-divider">
+                    <span>或使用以下方式快速注册</span>
+                </div>
+                
+                <div class="social-login" id="register-social-buttons">
+                    <div class="loading"><div class="spinner"></div></div>
+                </div>
+                
                 <div class="form-footer">
                     已有账号？<a href="javascript:void(0)" onclick="navigate('login')">立即登录</a>
                 </div>
@@ -377,6 +611,32 @@ class App {
                 showToast(error.message, 'error');
             }
         });
+
+        this._loadRegisterSocialButtons();
+    }
+
+    async _loadRegisterSocialButtons() {
+        try {
+            const providers = await auth.getOAuthProviders();
+            const container = document.getElementById('register-social-buttons');
+            if (!container) return;
+            
+            const oauthProviders = providers.filter(p => p.provider !== 'email');
+            
+            if (oauthProviders.length === 0) {
+                container.innerHTML = '<p style="color: var(--text-muted); text-align: center;">暂无第三方注册方式</p>';
+                return;
+            }
+            
+            container.innerHTML = oauthProviders.map(p => `
+                <button class="btn btn-social btn-${p.provider}" onclick="app.socialLogin('${p.provider}')">
+                    <span class="social-icon">${p.icon}</span>
+                    <span>${p.name}快速注册</span>
+                </button>
+            `).join('');
+        } catch (error) {
+            console.error('加载第三方注册方式失败:', error);
+        }
     }
 
     async renderIdeas(container) {
@@ -922,6 +1182,7 @@ class App {
                     <div class="tabs">
                         <button class="tab active" data-tab="edit">编辑资料</button>
                         <button class="tab" data-tab="password">修改密码</button>
+                        <button class="tab" data-tab="accounts">账号绑定</button>
                     </div>
                     <div id="tab-content">
                         <div id="tab-edit">
@@ -953,6 +1214,17 @@ class App {
                                 </div>
                                 <button type="submit" class="btn btn-primary">修改密码</button>
                             </form>
+                        </div>
+                        <div id="tab-accounts" style="display: none;">
+                            <div class="linked-accounts">
+                                <h3>第三方账号绑定</h3>
+                                <div id="linked-accounts-list">
+                                    <div class="loading"><div class="spinner"></div></div>
+                                </div>
+                                <p style="margin-top: 1rem; font-size: 0.85rem; color: var(--text-muted);">
+                                    绑定第三方账号后，可以使用该账号快速登录，无需记住密码。
+                                </p>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1021,6 +1293,126 @@ class App {
                 showToast(error.message, 'error');
             }
         });
+
+        const accountsTab = document.querySelector('[data-tab="accounts"]');
+        if (accountsTab) {
+            accountsTab.addEventListener('click', () => {
+                this._loadLinkedAccounts();
+            });
+        }
+    }
+
+    async _loadLinkedAccounts() {
+        try {
+            const [accountsData, providersData] = await Promise.all([
+                auth.getLinkedAccounts(),
+                auth.getOAuthProviders()
+            ]);
+
+            const linkedAccounts = accountsData.accounts || [];
+            const hasPassword = accountsData.has_password;
+            const allProviders = providersData.filter(p => p.provider !== 'email');
+
+            const container = document.getElementById('linked-accounts-list');
+            if (!container) return;
+
+            let html = '';
+            
+            allProviders.forEach(provider => {
+                const linked = linkedAccounts.find(a => a.provider === provider.provider);
+                const providerName = provider.provider === 'github' ? 'GitHub' : 'QQ';
+                
+                if (linked) {
+                    html += `
+                        <div class="account-item">
+                            <div class="account-item-left">
+                                <span class="account-icon">${provider.icon}</span>
+                                <div class="account-info">
+                                    <h4>${providerName}账号</h4>
+                                    <p>已绑定 · 绑定时间: ${formatDate(linked.created_at)}</p>
+                                </div>
+                            </div>
+                            <button class="btn btn-outline btn-sm" onclick="app.unlinkAccount('${provider.provider}')">
+                                解绑
+                            </button>
+                        </div>
+                    `;
+                } else {
+                    html += `
+                        <button class="link-account-btn" onclick="app.linkAccount('${provider.provider}')">
+                            <span class="account-icon">${provider.icon}</span>
+                            <span>绑定${providerName}账号</span>
+                        </button>
+                    `;
+                }
+            });
+
+            if (allProviders.length === 0) {
+                html = '<p style="color: var(--text-muted); text-align: center; padding: 2rem;">暂无可绑定的第三方账号</p>';
+            }
+
+            container.innerHTML = html;
+        } catch (error) {
+            console.error('加载绑定账号失败:', error);
+            const container = document.getElementById('linked-accounts-list');
+            if (container) {
+                container.innerHTML = '<p style="color: var(--danger-color); text-align: center;">加载失败，请刷新重试</p>';
+            }
+        }
+    }
+
+    async linkAccount(provider) {
+        try {
+            showToast(`正在跳转到${provider === 'github' ? 'GitHub' : 'QQ'}授权页面...`, 'info');
+            
+            const result = await api.get(`/auth/oauth/${provider}`);
+            const authUrl = result.auth_url;
+            
+            const width = 600;
+            const height = 700;
+            const left = (window.screen.width - width) / 2;
+            const top = (window.screen.height - height) / 2;
+            
+            const linkWindow = window.open(
+                authUrl,
+                'Link Account',
+                `width=${width},height=${height},left=${left},top=${top},scrollbars=yes,resizable=yes`
+            );
+
+            window._handleLinkCallback = async (data) => {
+                if (linkWindow && !linkWindow.closed) {
+                    linkWindow.close();
+                }
+                
+                if (data.success && data.code) {
+                    try {
+                        await auth.linkAccount(provider, data.code);
+                        showToast('绑定成功！', 'success');
+                        this._loadLinkedAccounts();
+                    } catch (error) {
+                        showToast(error.message, 'error');
+                    }
+                } else {
+                    showToast(data.error || '绑定失败', 'error');
+                }
+            };
+        } catch (error) {
+            showToast(error.message, 'error');
+        }
+    }
+
+    async unlinkAccount(provider) {
+        if (!confirm(`确定要解绑${provider === 'github' ? 'GitHub' : 'QQ'}账号吗？解绑后将无法使用该账号登录。`)) {
+            return;
+        }
+        
+        try {
+            await auth.unlinkAccount(provider);
+            showToast('解绑成功！', 'success');
+            this._loadLinkedAccounts();
+        } catch (error) {
+            showToast(error.message, 'error');
+        }
     }
 
     async loadUserStats(userId) {
