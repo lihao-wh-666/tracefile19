@@ -1,10 +1,18 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from datetime import datetime
+import os
+import uuid
 from app.models import db, IdeaCard, User, Like, Comment
 from app import log_operation_from_request
 
 ideas_bp = Blueprint('ideas', __name__)
+
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+
+def allowed_file(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 @ideas_bp.route('', methods=['GET'])
@@ -367,3 +375,34 @@ def get_categories():
     return jsonify({
         'categories': [{'name': cat, 'count': count} for cat, count in categories]
     }), 200
+
+
+@ideas_bp.route('/upload-image', methods=['POST'])
+@jwt_required()
+def upload_idea_image():
+    current_user_id = int(get_jwt_identity())
+    
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+    
+    file = request.files['file']
+    
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+    
+    if file and allowed_file(file.filename):
+        ext = file.filename.rsplit('.', 1)[1].lower()
+        filename = f"idea_{current_user_id}_{uuid.uuid4().hex}.{ext}"
+        filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], 'ideas', filename)
+        
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        file.save(filepath)
+        
+        image_url = f"/uploads/ideas/{filename}"
+        
+        return jsonify({
+            'message': 'Image uploaded successfully',
+            'image_url': image_url
+        }), 200
+    
+    return jsonify({'error': 'Invalid file type. Allowed types: png, jpg, jpeg, gif, webp'}), 400

@@ -739,7 +739,7 @@ class App {
                         <h3 class="idea-title">${escapeHtml(idea.title)}</h3>
                         ${idea.category ? `<span class="category-badge">${escapeHtml(idea.category)}</span>` : ''}
                     </div>
-                    <p class="idea-description">${escapeHtml(idea.content)}</p>
+                    <p class="idea-description">${escapeHtml(getContentPreview(idea.content, 100))}</p>
                     <div class="tags">
                         ${tags.map(tag => `<span class="tag">#${escapeHtml(tag.trim())}</span>`).join('')}
                     </div>
@@ -806,7 +806,7 @@ class App {
                     </div>
                     <div class="idea-image" style="height: 300px; font-size: 6rem;">${emoji}</div>
                     <div class="idea-detail-content">
-                        ${escapeHtml(idea.content).replace(/\n/g, '<br>')}
+                        ${renderContentWithImages(idea.content)}
                     </div>
                     <div class="idea-detail-actions">
                         <button class="btn ${isLiked ? 'btn-danger' : 'btn-outline'}" id="like-btn" onclick="toggleLike(${idea.id})">
@@ -926,7 +926,19 @@ class App {
                     </div>
                     <div class="form-group">
                         <label>内容 *</label>
-                        <textarea name="content" required placeholder="详细描述你的灵感..."></textarea>
+                        <div class="editor-toolbar">
+                            <button type="button" class="toolbar-btn" onclick="toggleEmojiPicker('idea-content', 'emoji-picker-create')" title="插入表情">
+                                😀 表情
+                            </button>
+                            <button type="button" class="toolbar-btn" onclick="triggerImageUpload('idea-image-input')" title="上传图片">
+                                🖼️ 图片
+                            </button>
+                            <input type="file" id="idea-image-input" accept="image/png,image/jpeg,image/jpg,image/gif,image/webp" style="display:none;" onchange="handleImageUpload(event, 'idea-content')">
+                        </div>
+                        <div class="emoji-picker" id="emoji-picker-create">
+                            ${EMOJI_LIST.map(emoji => `<span class="emoji-item" onclick="insertEmoji('idea-content', '${emoji}')">${emoji}</span>`).join('')}
+                        </div>
+                        <textarea id="idea-content" name="content" required placeholder="详细描述你的灵感..."></textarea>
                     </div>
                     <div class="form-group">
                         <label>图标表情</label>
@@ -1022,7 +1034,19 @@ class App {
                         </div>
                         <div class="form-group">
                             <label>内容 *</label>
-                            <textarea name="content" required>${escapeHtml(idea.content)}</textarea>
+                            <div class="editor-toolbar">
+                                <button type="button" class="toolbar-btn" onclick="toggleEmojiPicker('edit-idea-content', 'emoji-picker-edit')" title="插入表情">
+                                    😀 表情
+                                </button>
+                                <button type="button" class="toolbar-btn" onclick="triggerImageUpload('edit-idea-image-input')" title="上传图片">
+                                    🖼️ 图片
+                                </button>
+                                <input type="file" id="edit-idea-image-input" accept="image/png,image/jpeg,image/jpg,image/gif,image/webp" style="display:none;" onchange="handleImageUpload(event, 'edit-idea-content')">
+                            </div>
+                            <div class="emoji-picker" id="emoji-picker-edit">
+                                ${EMOJI_LIST.map(emoji => `<span class="emoji-item" onclick="insertEmoji('edit-idea-content', '${emoji}')">${emoji}</span>`).join('')}
+                            </div>
+                            <textarea id="edit-idea-content" name="content" required>${escapeHtml(idea.content)}</textarea>
                         </div>
                         <div class="form-group">
                             <label>图标表情</label>
@@ -4464,6 +4488,129 @@ function debounce(func, wait) {
     };
 }
 
+const EMOJI_LIST = [
+    '😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂', '🙂', '🙃',
+    '😉', '😊', '😇', '🥰', '😍', '🤩', '😘', '😗', '😚', '😙',
+    '🥲', '😋', '😛', '😜', '🤪', '😝', '🤑', '🤗', '🤭', '🤫',
+    '🤔', '🤐', '🤨', '😐', '😑', '😶', '😏', '😒', '🙄', '😬',
+    '🤥', '😌', '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢',
+    '🤮', '🤧', '🥵', '🥶', '🥴', '😵', '🤯', '🤠', '🥳', '😎',
+    '🤓', '🧐', '😕', '😟', '🙁', '☹️', '😮', '😯', '😲', '😳',
+    '🥺', '😦', '😧', '😨', '😰', '😥', '😢', '😭', '😱', '😖',
+    '😣', '😞', '😓', '😩', '😫', '🥱', '😤', '😡', '😠', '🤬',
+    '😈', '👿', '💀', '☠️', '💩', '🤡', '👹', '👺', '👻', '👽',
+    '👾', '🤖', '😺', '😸', '😹', '😻', '😼', '😽', '🙀', '😿',
+    '😾', '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎',
+    '💔', '❣️', '💕', '💞', '💓', '💗', '💖', '💘', '💝', '💟',
+    '👍', '👎', '👊', '✊', '🤛', '🤜', '🤞', '✌️', '🤟', '🤘',
+    '👌', '🤌', '🤏', '👈', '👉', '👆', '👇', '☝️', '✋', '🤚',
+    '🖐️', '🖖', '👋', '🤙', '💪', '🦾', '🖕', '🙏', '✍️', '💅',
+    '🎮', '🎲', '🎯', '🎪', '🎨', '🎭', '🏰', '🚀', '⚔️', '🔮',
+    '⭐', '🌟', '✨', '💫', '🔥', '💥', '💦', '💨', '🎉', '🎊',
+    '🎁', '🎈', '🎀', '🏆', '🥇', '🥈', '🥉', '🏅', '🎖️', '📝',
+    '📌', '📎', '✂️', '🔧', '🔨', '⚙️', '🛠️', '🧰', '💡', '🔦'
+];
+
+function insertAtCursor(textarea, text) {
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const value = textarea.value;
+    textarea.value = value.substring(0, start) + text + value.substring(end);
+    textarea.selectionStart = textarea.selectionEnd = start + text.length;
+    textarea.focus();
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function renderContentWithImages(content) {
+    if (!content) return '';
+    let html = escapeHtml(content);
+    const imgRegex = /\[img\](.+?)\[\/img\]/g;
+    html = html.replace(imgRegex, (match, url) => {
+        return `<img src="${url}" alt="image" class="content-image" onclick="openImagePreview('${url}')" loading="lazy">`;
+    });
+    html = html.replace(/\n/g, '<br>');
+    return html;
+}
+
+function getContentPreview(content, maxLength = 100) {
+    if (!content) return '';
+    let text = content.replace(/\[img\].*?\[\/img\]/g, '🖼️图片');
+    text = text.replace(/\n/g, ' ');
+    if (text.length > maxLength) {
+        text = text.substring(0, maxLength) + '...';
+    }
+    return text;
+}
+
+function openImagePreview(imageUrl) {
+    const modal = document.createElement('div');
+    modal.className = 'image-preview-modal';
+    modal.id = 'image-preview-modal';
+    modal.innerHTML = `
+        <div class="image-preview-overlay" onclick="closeImagePreview()"></div>
+        <div class="image-preview-content">
+            <button class="image-preview-close" onclick="closeImagePreview()">&times;</button>
+            <img src="${imageUrl}" alt="preview" class="image-preview-img">
+        </div>
+    `;
+    document.body.appendChild(modal);
+    document.body.style.overflow = 'hidden';
+}
+
+function closeImagePreview() {
+    const modal = document.getElementById('image-preview-modal');
+    if (modal) {
+        modal.remove();
+        document.body.style.overflow = '';
+    }
+}
+
+function toggleEmojiPicker(textareaId, pickerId) {
+    const picker = document.getElementById(pickerId);
+    if (picker.style.display === 'none' || !picker.style.display) {
+        picker.style.display = 'block';
+    } else {
+        picker.style.display = 'none';
+    }
+}
+
+function insertEmoji(textareaId, emoji) {
+    const textarea = document.getElementById(textareaId);
+    if (textarea) {
+        insertAtCursor(textarea, emoji);
+    }
+}
+
+async function uploadIdeaImage(file, textareaId) {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    showToast('正在上传图片...', 'info');
+    
+    try {
+        const result = await api.upload('/ideas/upload-image', formData);
+        const textarea = document.getElementById(textareaId);
+        if (textarea) {
+            insertAtCursor(textarea, `[img]${result.image_url}[/img]`);
+        }
+        showToast('图片上传成功！', 'success');
+    } catch (error) {
+        showToast(error.message, 'error');
+    }
+}
+
+function triggerImageUpload(inputId) {
+    document.getElementById(inputId).click();
+}
+
+function handleImageUpload(event, textareaId) {
+    const file = event.target.files[0];
+    if (file) {
+        uploadIdeaImage(file, textareaId);
+    }
+    event.target.value = '';
+}
+
 window.addEventListener('popstate', () => app.handleRoute());
 
 let app;
@@ -4478,4 +4625,21 @@ document.addEventListener('DOMContentLoaded', () => {
     if (navOverlay) {
         navOverlay.addEventListener('click', () => app.closeMobileMenu());
     }
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            closeImagePreview();
+            document.querySelectorAll('.emoji-picker').forEach(picker => {
+                picker.style.display = 'none';
+            });
+        }
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.emoji-picker') && !e.target.closest('.toolbar-btn')) {
+            document.querySelectorAll('.emoji-picker').forEach(picker => {
+                picker.style.display = 'none';
+            });
+        }
+    });
 });
