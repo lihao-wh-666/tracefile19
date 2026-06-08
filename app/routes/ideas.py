@@ -1,18 +1,45 @@
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app, send_from_directory
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from datetime import datetime
 import os
 import uuid
-from app.models import db, IdeaCard, User, Like, Comment
+from app.models import db, IdeaCard, User, Like, Comment, IdeaAttachment
 from app import log_operation_from_request
 
 ideas_bp = Blueprint('ideas', __name__)
 
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+ALLOWED_DOC_EXTENSIONS = {'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'md'}
+ALLOWED_ATTACHMENT_EXTENSIONS = ALLOWED_IMAGE_EXTENSIONS | ALLOWED_DOC_EXTENSIONS
 
 def allowed_file(filename):
     return '.' in filename and \
-           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_IMAGE_EXTENSIONS
+
+def allowed_attachment(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_ATTACHMENT_EXTENSIONS
+
+def get_file_type(filename):
+    ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
+    type_map = {
+        'pdf': 'pdf',
+        'doc': 'word', 'docx': 'word',
+        'xls': 'excel', 'xlsx': 'excel',
+        'ppt': 'ppt', 'pptx': 'ppt',
+        'txt': 'text', 'md': 'text',
+        'png': 'image', 'jpg': 'image', 'jpeg': 'image',
+        'gif': 'image', 'webp': 'image'
+    }
+    return type_map.get(ext, 'other')
+
+def format_file_size(size_bytes):
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    else:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
 
 
 @ideas_bp.route('', methods=['GET'])
@@ -406,3 +433,172 @@ def upload_idea_image():
         }), 200
     
     return jsonify({'error': 'Invalid file type. Allowed types: png, jpg, jpeg, gif, webp'}), 400
+
+
+@ideas_bp.route('/<int:idea_id>/attachments', methods=['POST'])
+@jwt_required()
+def upload_attachment(idea_id):
+    current_user_id = int(get_jwt_identity())
+    idea = IdeaCard.query.get(idea_id)
+    
+    if not idea or idea.is_deleted:
+        return jsonify({'error': 'Idea not found'}), 404
+    
+    if idea.user_id != current_user_id:
+        return jsonify({'error': 'Permission denied'}), 403
+    
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+    
+    file = request.files['file']
+    
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+    
+    if not file or not allowed_attachment(file.filename):
+        return jsonify({'error': 'Invalid file type. Allowed types: pdf, doc, docx, xls, xlsx, ppt, pptx, txt, md, png, jpg, jpeg, gif, webp'}), 400
+    
+    ext = file.filename.rsplit('.', 1)[1].lower()
+    filename = f"attach_{idea_id}_{current_user_id}_{uuid.uuid4().hex}.{ext}"
+    filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], 'ideas', 'attachments', filename)
+    
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    file.save(filepath)
+    
+    file_size = os.path.getsize(filepath)
+    file_type = get_file_type(file.filename)
+    
+    attachment = IdeaAttachment(
+        idea_id=idea_id,
+        filename=filename,
+        original_filename=file.filename,
+        file_type=file_type,
+        file_size=file_size,
+        file_path=filepath,
+        user_id=current_user_id
+    )
+    
+    db.session.add(attachment)
+    db.session.commit()
+    
+    log_operation_from_request(
+        operation_type='upload_attachment',
+        target_type='idea',
+        target_id=idea_id,
+        user_id=current_user_id,
+        details={'filename': file.filename, 'file_type': file_type, 'file_size': file_size}
+    )
+    
+    return jsonify({
+        'message': 'Attachment uploaded successfully',
+        'attachment': attachment.to_dict()
+    }), 201
+
+
+@ideas_bp.route('/<int:idea_id>/attachments', methods=['GET'])
+def get_attachments(idea_id):
+    idea = IdeaCard.query.get(idea_id)
+    
+    if not idea or idea.is_deleted:
+        return jsonify({'error': 'Idea not found'}), 404
+    
+    if not idea.is_public and idea.status != 'published':
+        return jsonify({'error': 'Idea is not available'}), 403
+    
+    attachments = IdeaAttachment.query.filter_by(idea_id=idea_id).order_by(IdeaAttachment.created_at.desc()).all()
+    
+    return jsonify({
+        'attachments': [att.to_dict() for att in attachments]
+    }), 200
+
+
+@ideas_bp.route('/attachments/<int:attachment_id>', methods=['DELETE'])
+@jwt_required()
+def delete_attachment(attachment_id):
+    current_user_id = int(get_jwt_identity())
+    attachment = IdeaAttachment.query.get(attachment_id)
+    
+    if not attachment:
+        return jsonify({'error': 'Attachment not found'}), 404
+    
+    if attachment.user_id != current_user_id:
+        return jsonify({'error': 'Permission denied'}), 403
+    
+    idea_id = attachment.idea_id
+    filename = attachment.original_filename
+    
+    if os.path.exists(attachment.file_path):
+        try:
+            os.remove(attachment.file_path)
+        except OSError:
+            pass
+    
+    db.session.delete(attachment)
+    db.session.commit()
+    
+    log_operation_from_request(
+        operation_type='delete_attachment',
+        target_type='idea',
+        target_id=idea_id,
+        user_id=current_user_id,
+        details={'filename': filename}
+    )
+    
+    return jsonify({'message': 'Attachment deleted successfully'}), 200
+
+
+@ideas_bp.route('/attachments/download/<int:attachment_id>', methods=['GET'])
+def download_attachment(attachment_id):
+    attachment = IdeaAttachment.query.get(attachment_id)
+    
+    if not attachment:
+        return jsonify({'error': 'Attachment not found'}), 404
+    
+    idea = IdeaCard.query.get(attachment.idea_id)
+    if not idea or idea.is_deleted:
+        return jsonify({'error': 'Idea not found'}), 404
+    
+    if not idea.is_public and idea.status != 'published':
+        return jsonify({'error': 'Idea is not available'}), 403
+    
+    upload_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'ideas', 'attachments')
+    
+    return send_from_directory(
+        upload_dir,
+        attachment.filename,
+        as_attachment=True,
+        download_name=attachment.original_filename
+    )
+
+
+@ideas_bp.route('/attachments/preview/<int:attachment_id>', methods=['GET'])
+def preview_attachment(attachment_id):
+    attachment = IdeaAttachment.query.get(attachment_id)
+    
+    if not attachment:
+        return jsonify({'error': 'Attachment not found'}), 404
+    
+    idea = IdeaCard.query.get(attachment.idea_id)
+    if not idea or idea.is_deleted:
+        return jsonify({'error': 'Idea not found'}), 404
+    
+    if not idea.is_public and idea.status != 'published':
+        return jsonify({'error': 'Idea is not available'}), 403
+    
+    upload_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'ideas', 'attachments')
+    
+    mimetype_map = {
+        'pdf': 'application/pdf',
+        'image': 'image/*',
+        'text': 'text/plain',
+    }
+    
+    mimetype = mimetype_map.get(attachment.file_type)
+    
+    return send_from_directory(
+        upload_dir,
+        attachment.filename,
+        as_attachment=False,
+        download_name=attachment.original_filename,
+        mimetype=mimetype
+    )

@@ -411,7 +411,7 @@ class IdeaCard(db.Model):
     likes = db.relationship('Like', backref='idea', lazy=True, cascade='all, delete-orphan')
     comments = db.relationship('Comment', backref='idea', lazy=True, cascade='all, delete-orphan')
     
-    def to_dict(self, include_user=True):
+    def to_dict(self, include_user=True, include_attachments=True):
         from app import format_datetime_iso
         data = {
             'id': self.id,
@@ -425,6 +425,7 @@ class IdeaCard(db.Model):
             'user_id': self.user_id,
             'likes_count': len(self.likes),
             'comments_count': len(self.comments),
+            'attachments_count': len(self.attachments) if self.attachments else 0,
             'is_deleted': self.is_deleted,
             'deleted_at': format_datetime_iso(self.deleted_at) if self.deleted_at else None,
             'deleted_by': self.deleted_by,
@@ -433,6 +434,10 @@ class IdeaCard(db.Model):
         }
         if include_user and self.author:
             data['author'] = self.author.to_dict()
+        if include_attachments and self.attachments:
+            data['attachments'] = [att.to_dict() for att in self.attachments]
+        else:
+            data['attachments'] = []
         return data
 
 
@@ -474,6 +479,40 @@ class Comment(db.Model):
         if self.reply_to_user:
             data['reply_to_user'] = self.reply_to_user.to_dict()
         return data
+
+
+class IdeaAttachment(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    idea_id = db.Column(db.Integer, db.ForeignKey('idea_card.id'), nullable=False)
+    filename = db.Column(db.String(255), nullable=False)
+    original_filename = db.Column(db.String(255), nullable=False)
+    file_type = db.Column(db.String(50))
+    file_size = db.Column(db.Integer)
+    file_path = db.Column(db.String(500), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    idea = db.relationship('IdeaCard', backref='attachments')
+    user = db.relationship('User', backref='idea_attachments')
+
+    __table_args__ = (
+        db.Index('idx_attachment_idea', 'idea_id'),
+        db.Index('idx_attachment_user', 'user_id'),
+    )
+
+    def to_dict(self):
+        from app import format_datetime_iso
+        return {
+            'id': self.id,
+            'idea_id': self.idea_id,
+            'filename': self.filename,
+            'original_filename': self.original_filename,
+            'file_type': self.file_type,
+            'file_size': self.file_size,
+            'file_url': f'/uploads/ideas/attachments/{self.filename}',
+            'user_id': self.user_id,
+            'created_at': format_datetime_iso(self.created_at)
+        }
 
 
 class OperationLog(db.Model):

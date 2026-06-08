@@ -753,6 +753,7 @@ class App {
                         <div class="idea-stats">
                             <span class="stat">❤️ ${idea.likes_count || 0}</span>
                             <span class="stat">💬 ${idea.comments_count || 0}</span>
+                            ${idea.attachments_count > 0 ? `<span class="stat">📎 ${idea.attachments_count}</span>` : ''}
                         </div>
                     </div>
                 </div>
@@ -808,6 +809,14 @@ class App {
                     <div class="idea-detail-content">
                         ${renderContentWithImages(idea.content)}
                     </div>
+                    ${idea.attachments && idea.attachments.length > 0 ? `
+                        <div class="idea-attachments">
+                        <h3 style="margin-bottom: 1rem;">📎 附件 (${idea.attachments.length})</h3>
+                        <div class="attachments-list">
+                            ${idea.attachments.map(att => renderAttachmentItem(att, isOwner)).join('')}
+                        </div>
+                    </div>
+                    ` : ''}
                     <div class="idea-detail-actions">
                         <button class="btn ${isLiked ? 'btn-danger' : 'btn-outline'}" id="like-btn" onclick="toggleLike(${idea.id})">
                             ${isLiked ? '❤️' : '🤍'} ${likesResult.likes} 点赞
@@ -961,6 +970,12 @@ class App {
                             公开可见
                         </label>
                     </div>
+                    <div class="form-group">
+                        <label style="display: block; margin-bottom: 0.5rem;">💡 提示</label>
+                        <div style="padding: 0.75rem; background: var(--bg-secondary); border-radius: 8px; font-size: 0.9rem; color: var(--text-muted);">
+                            发布灵感后，您可以在编辑页面添加附件（支持 PDF、Word、Excel、PPT、图片等格式）
+                        </div>
+                    </div>
                     <button type="submit" class="btn btn-primary btn-block">发布灵感</button>
                 </form>
             </div>
@@ -1076,10 +1091,49 @@ class App {
                                 公开可见
                             </label>
                         </div>
+                        <div class="form-group">
+                            <label>📎 附件</label>
+                            <div class="attachment-upload-area" id="attachment-upload-area">
+                                <div class="attachment-upload-hint" onclick="triggerAttachmentUpload('edit-attachment-input')">
+                                    <div style="font-size: 2rem; margin-bottom: 0.5rem;">📁</div>
+                                    <div>点击或拖拽文件到此处上传附件</div>
+                                    <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">
+                                        支持 PDF、Word、Excel、PPT、TXT、图片等格式
+                                    </div>
+                                </div>
+                                <input type="file" id="edit-attachment-input" style="display:none;" multiple 
+                                    accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.png,.jpg,.jpeg,.gif,.webp"
+                                    onchange="handleAttachmentUpload(event, ${id})">
+                            </div>
+                            <div id="attachments-list" class="attachments-list" style="margin-top: 1rem;">
+                                <div class="loading"><div class="spinner"></div></div>
+                            </div>
+                        </div>
                         <button type="submit" class="btn btn-primary btn-block">保存修改</button>
                     </form>
                 </div>
             `;
+
+            this.loadAttachments(id);
+
+            const uploadArea = document.getElementById('attachment-upload-area');
+            if (uploadArea) {
+                uploadArea.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    uploadArea.classList.add('drag-over');
+                });
+                uploadArea.addEventListener('dragleave', () => {
+                    uploadArea.classList.remove('drag-over');
+                });
+                uploadArea.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    uploadArea.classList.remove('drag-over');
+                    const files = e.dataTransfer.files;
+                    for (let file of files) {
+                        uploadIdeaAttachment(id, file, () => app.loadAttachments(id));
+                    }
+                });
+            }
 
             document.getElementById('edit-idea-form').addEventListener('submit', async (e) => {
                 e.preventDefault();
@@ -1103,6 +1157,26 @@ class App {
         } catch (error) {
             showToast(error.message, 'error');
             navigate('ideas');
+        }
+    }
+
+    async loadAttachments(ideaId) {
+        try {
+            const result = await api.get(`/ideas/${ideaId}/attachments`);
+            const listContainer = document.getElementById('attachments-list');
+            if (listContainer) {
+                if (result.attachments.length === 0) {
+                    listContainer.innerHTML = `
+                        <div style="text-align: center; padding: 1rem; color: var(--text-muted); font-size: 0.9rem;">
+                            暂无附件
+                        </div>
+                    `;
+                } else {
+                    listContainer.innerHTML = result.attachments.map(att => renderAttachmentItem(att, true)).join('');
+                }
+            }
+        } catch (error) {
+            console.error('Failed to load attachments:', error);
         }
     }
 
@@ -4609,6 +4683,127 @@ function handleImageUpload(event, textareaId) {
         uploadIdeaImage(file, textareaId);
     }
     event.target.value = '';
+}
+
+function getFileIcon(fileType) {
+    const icons = {
+        'pdf': '📄',
+        'word': '📝',
+        'excel': '📊',
+        'ppt': '📽️',
+        'text': '📃',
+        'image': '🖼️',
+        'other': '📎'
+    };
+    return icons[fileType] || icons['other'];
+}
+
+function formatFileSize(bytes) {
+    if (!bytes) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function canPreview(fileType) {
+    return ['pdf', 'image', 'text'].includes(fileType);
+}
+
+async function uploadIdeaAttachment(ideaId, file, onSuccess) {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    showToast('正在上传附件...', 'info');
+    
+    try {
+        const result = await api.upload(`/ideas/${ideaId}/attachments`, formData);
+        showToast('附件上传成功！', 'success');
+        if (onSuccess) {
+            onSuccess(result.attachment);
+        }
+    } catch (error) {
+        showToast(error.message, 'error');
+    }
+}
+
+async function deleteIdeaAttachment(attachmentId, onSuccess) {
+    if (!confirm('确定要删除这个附件吗？')) {
+        return;
+    }
+    
+    try {
+        await api.delete(`/ideas/attachments/${attachmentId}`);
+        showToast('附件删除成功！', 'success');
+        if (onSuccess) {
+            onSuccess();
+        }
+    } catch (error) {
+        showToast(error.message, 'error');
+    }
+}
+
+function renderAttachmentItem(attachment, isOwner = false) {
+    const icon = getFileIcon(attachment.file_type);
+    const size = formatFileSize(attachment.file_size);
+    const canPreviewFile = canPreview(attachment.file_type);
+    
+    return `
+        <div class="attachment-item" data-id="${attachment.id}">
+            <div class="attachment-icon">${icon}</div>
+            <div class="attachment-info">
+                <div class="attachment-name" title="${escapeHtml(attachment.original_filename)}">
+                    ${escapeHtml(attachment.original_filename)}
+                </div>
+                <div class="attachment-meta">${size}</div>
+            </div>
+            <div class="attachment-actions">
+                ${canPreviewFile ? `
+                    <button class="btn btn-outline btn-sm" onclick="previewAttachment(${attachment.id})" title="在线预览">
+                        👁️ 预览
+                    </button>
+                ` : ''}
+                <button class="btn btn-outline btn-sm" onclick="downloadAttachment(${attachment.id})" title="下载">
+                    ⬇️ 下载
+                </button>
+                ${isOwner ? `
+                    <button class="btn btn-danger btn-sm" onclick="deleteAttachment(${attachment.id})" title="删除">
+                        🗑️ 删除
+                    </button>
+                ` : ''}
+            </div>
+        </div>
+    `;
+}
+
+function previewAttachment(attachmentId) {
+    const url = `/api/ideas/attachments/preview/${attachmentId}`;
+    window.open(url, '_blank');
+}
+
+function downloadAttachment(attachmentId) {
+    window.location.href = `/api/ideas/attachments/download/${attachmentId}`;
+}
+
+function triggerAttachmentUpload(inputId) {
+    document.getElementById(inputId).click();
+}
+
+function handleAttachmentUpload(event, ideaId) {
+    const files = event.target.files;
+    for (let file of files) {
+        uploadIdeaAttachment(ideaId, file, () => app.loadAttachments(ideaId));
+    }
+    event.target.value = '';
+}
+
+function deleteAttachment(attachmentId) {
+    deleteIdeaAttachment(attachmentId, () => {
+        const item = document.querySelector(`.attachment-item[data-id="${attachmentId}"]`);
+        if (item) {
+            item.remove();
+        }
+    });
 }
 
 window.addEventListener('popstate', () => app.handleRoute());
